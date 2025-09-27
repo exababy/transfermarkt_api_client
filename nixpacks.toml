@@ -1,0 +1,11 @@
+# This tells Railway how to build and start your app
+# Using Nixpacks (Railway's default)
+
+[build]
+cmd = "npm install"
+
+[start]
+cmd = "npm start"
+
+[env]
+NODE_ENV = "production"
