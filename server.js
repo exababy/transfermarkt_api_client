@@ -98,7 +98,7 @@ app.get('/game/:id', async (req, res) => {
       return res.status(400).json({ error: 'Invalid game ID' });
     }
 
-    const data = await services.gameDetails(gameId);
+      const data = await services.game(gameId);
     if (!data) {
       return res.status(404).json({ error: 'Game not found' });
     }
