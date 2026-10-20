@@ -113,7 +113,9 @@ final class OrdersController
                 if ($fresh !== null) {
                     OrderNotifier::paid($fresh);
                 }
-                Session::flash('success', 'Ödeme alındı olarak işaretlendi; sipariş “Onaylandı” durumuna geçti.');
+                Session::flash('success', ($fresh['status'] ?? '') === 'onaylandi'
+                    ? 'Ödeme alındı olarak işaretlendi; sipariş “Onaylandı” durumuna geçti.'
+                    : 'Ödeme alındı olarak işaretlendi; sipariş durumu değişmedi (“' . (Shop::STATUSES[$fresh['status'] ?? $order['status']] ?? ($fresh['status'] ?? $order['status'])) . '”).');
             } else {
                 Session::flash('info', 'Bu siparişin ödemesi zaten alınmış.');
             }

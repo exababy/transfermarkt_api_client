@@ -123,8 +123,12 @@ final class FeedParser
         }
         $value = str_replace(['&#x2B;', '&#43;'], '+', $value);
         try {
-            $utc = Date::toUtc($value);
-        } catch (\InvalidArgumentException) {
+            // A date without a zone comes from a Turkish feed in local time, not UTC.
+            $parsed = date_parse($value);
+            $utc = $parsed['error_count'] === 0 && empty($parsed['is_localtime'])
+                ? (new \DateTimeImmutable($value, new \DateTimeZone('Europe/Istanbul')))->setTimezone(new \DateTimeZone('UTC'))->format('Y-m-d H:i:s')
+                : Date::toUtc($value);
+        } catch (\Exception) {
             $ts = strtotime($value);
             if ($ts === false) {
                 return null;

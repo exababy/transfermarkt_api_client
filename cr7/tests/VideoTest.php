@@ -10,6 +10,7 @@ use App\Core\Database;
 use App\Core\Request;
 use App\Core\Response;
 use App\Core\Router;
+use App\Core\Settings;
 use App\Cron\Tasks\VideoSyncTask;
 use App\Install\Seeders\VideoSeeder;
 use App\Repositories\VideoRepository;
@@ -450,6 +451,23 @@ final class VideoTest extends TestCase
     }
 
     // ------------------------------------------------------------------ repository + seeder
+
+    public function testSeederDoesNotResurrectVideosTheAdminDeleted(): void
+    {
+        (new VideoSeeder())->run();
+        Settings::flush();
+        $id = (string) VideoSeeder::videos()[0][0];
+        Database::execute('DELETE FROM videos WHERE youtube_id = ?', [$id]); // POST /admin/videolar/{id}/sil
+        // Every installer run (also "bin/install.php --reset-password") runs the seeders again.
+        $this->assertContains('1 video yönetimden silindiği için yeniden eklenmedi', (new VideoSeeder())->run());
+        $this->assertNull((new VideoRepository())->findByYoutubeId($id));
+        $this->assertSame(29, (new VideoRepository())->count());
+        // Installs from before the seeded-ids setting: a curated video missing next to the others was deleted too.
+        Settings::forget(VideoSeeder::SEEDED_KEY);
+        Settings::flush();
+        (new VideoSeeder())->run();
+        $this->assertNull((new VideoRepository())->findByYoutubeId($id));
+    }
 
     public function testSeederIsIdempotentAndRepositoryContract(): void
     {

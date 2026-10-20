@@ -15,8 +15,11 @@ final class OgImage
 {
     public const WIDTH = 1200;
     public const HEIGHT = 630;
-    /** Width of the card thumbnail used in listings (srcset); the 1200 px PNG stays for og:image. */
-    public const CARD_WIDTH = 640;
+    /**
+     * Width of the listing card thumbnail. It is a headline-free brand card (the card shows the title
+     * once, in the site font); the 1200 px PNG with the headline stays for og:image.
+     */
+    public const CARD_WIDTH = 800;
     private const GOLD = [212, 175, 55];
     private const GOLD_SOFT = [241, 215, 122];
 
@@ -103,15 +106,16 @@ final class OgImage
             @unlink($tmp);
             return null;
         }
-        self::variant('/og/' . $name . '.png');
+        self::variant('/og/' . $name . '.png', $eyebrow, $subtitle);
         return '/og/' . $name . '.png';
     }
 
     /**
-     * '/og/x-640.jpg' — a 640x336 JPEG of a generated '/og/x.png' (about a third of the PNG's
-     * bytes), created on first use; null when $path is not a generated image or GD cannot write it.
+     * '/og/x-800.jpg' — the listing thumbnail of a generated '/og/x.png': an 800x420 JPEG brand card
+     * (eyebrow pill, "Cristiano Ronaldo", subtitle, wordmark) WITHOUT the headline, created with the
+     * PNG or on first use; null when $path is not a generated image or GD cannot write it.
      */
-    public static function variant(?string $path): ?string
+    public static function variant(?string $path, string $eyebrow = 'HABER', string $subtitle = ''): ?string
     {
         if ($path === null || preg_match('#^/og/([a-z0-9-]+)\.png$#', $path, $m) !== 1) {
             return null;
@@ -121,17 +125,15 @@ final class OgImage
         if (is_file($target)) {
             return $variant;
         }
-        $source = App::basePath('public' . $path);
-        if (!is_file($source) || !function_exists('imagecreatefrompng') || !function_exists('imagejpeg')) {
+        $font = App::basePath('public/assets/fonts/DejaVuSans-Bold.ttf');
+        if (!is_file(App::basePath('public' . $path)) || !is_file($font)
+            || !function_exists('imagettftext') || !function_exists('imagejpeg')) {
             return null;
         }
-        $src = @imagecreatefrompng($source);
-        if ($src === false) {
-            return null;
-        }
-        $height = (int) round(self::CARD_WIDTH * imagesy($src) / max(1, imagesx($src)));
+        $card = self::brandCard($font, $eyebrow, $subtitle);
+        $height = (int) round(self::CARD_WIDTH * self::HEIGHT / self::WIDTH);
         $img = imagecreatetruecolor(self::CARD_WIDTH, $height);
-        imagecopyresampled($img, $src, 0, 0, 0, 0, self::CARD_WIDTH, $height, imagesx($src), imagesy($src));
+        imagecopyresampled($img, $card, 0, 0, 0, 0, self::CARD_WIDTH, $height, self::WIDTH, self::HEIGHT);
         imageinterlace($img, true);
         $tmp = $target . '.' . bin2hex(random_bytes(4)) . '.tmp';
         $ok = @imagejpeg($img, $tmp, 82);
@@ -212,6 +214,35 @@ final class OgImage
             $lines[] = $line;
         }
         return $lines;
+    }
+
+    /** 1200x630 headline-free brand card for listing thumbnails (same look as the share image). */
+    private static function brandCard(string $font, string $eyebrow, string $subtitle): \GdImage
+    {
+        $img = imagecreatetruecolor(self::WIDTH, self::HEIGHT);
+        imagealphablending($img, true);
+        imagecopy($img, self::background(), 0, 0, 0, 0, self::WIDTH, self::HEIGHT);
+        $gold = self::color($img, self::GOLD);
+        $muted = self::color($img, [163, 163, 178]);
+        imagettftext($img, 470, 0, 800, 640, imagecolorallocatealpha($img, self::GOLD[0], self::GOLD[1], self::GOLD[2], 118), $font, '7');
+
+        $pill = imagettfbbox(26, 0, $font, $eyebrow);
+        imagefilledrectangle($img, 80, 80, 80 + ($pill[2] - $pill[0]) + 48, 134, $gold);
+        imagettftext($img, 26, 0, 104, 120, self::color($img, [10, 10, 12]), $font, $eyebrow);
+
+        imagefilledrectangle($img, 80, 250, 87, 400, $gold);
+        imagettftext($img, 64, 0, 112, 312, self::color($img, [242, 242, 245]), $font, 'Cristiano');
+        imagettftext($img, 64, 0, 112, 395, self::color($img, self::GOLD_SOFT), $font, 'Ronaldo');
+
+        if ($subtitle !== '') {
+            imagettftext($img, 30, 0, 80, 570, $muted, $font, mb_substr($subtitle, 0, 40));
+        }
+        $box = imagettfbbox(40, 0, $font, 'CR7');
+        $tld = imagettfbbox(28, 0, $font, '.com.tr');
+        $x = self::WIDTH - 80 - (($box[2] - $box[0]) + 6 + ($tld[2] - $tld[0]));
+        $end = imagettftext($img, 40, 0, $x, 572, $gold, $font, 'CR7');
+        imagettftext($img, 28, 0, $end[2] + 6, 572, $muted, $font, '.com.tr');
+        return $img;
     }
 
     /** Brand background (rendered once at low resolution, upscaled smoothly, cached in storage/cache). */

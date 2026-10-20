@@ -33,6 +33,7 @@ final class NewsPublisher
         'too-short' => 'metin çok kısa',
         'title-too-similar' => 'başlık kaynağa çok benziyor',
         'off-topic' => 'kaynak metni Ronaldo ile ilgili değil',
+        'copy-check' => 'kaynakla aynen örtüşen bölüm çok fazla',
         'error' => 'beklenmeyen hata',
     ];
 
@@ -287,22 +288,27 @@ final class NewsPublisher
         }
         // "Ronaldo" alone is ambiguous: the story (feed title/description + lead article text) must
         // name Cristiano, otherwise it is another Ronaldo's (Nazário …) and would be published as his.
+        // The lead text becomes the body: when it points to another Ronaldo it must name Cristiano itself.
         if (isset($result['source_texts'][0])) {
             $lead = (array) ($result['lead'] ?? $item);
             $story = implode("\n", [$item['title'], $item['description'] ?? '', $lead['title'] ?? '', $lead['description'] ?? '', (string) $result['source_texts'][0]]);
-            if (!RelevanceFilter::aboutCristiano($story)) {
+            if (!RelevanceFilter::aboutCristiano($story) || RelevanceFilter::aboutOtherRonaldo((string) $result['source_texts'][0])) {
                 $this->recordFailure($item, 'off-topic', []);
                 return null;
             }
         }
 
-        // Scraped-content gate (Google spam policy): a post that still shares too many word 6-grams
-        // with a source, or copies a long run verbatim, is published noindex (kept out of the
-        // sitemaps and IndexNow) until an editor rewrites it and re-enables indexing.
+        // Scraped-content gate (Google spam policy; the owner never wants copies published): a post
+        // that still shares too many word 6-grams with a source, or copies a long run verbatim, is
+        // not published at all.
         $copy = isset($result['source_texts']) ? CopyCheck::measure((string) $result['body'], (array) $result['source_texts']) : null;
-        $indexable = self::indexSpunPosts() && ($copy === null || $copy['ok']);
+        if ($copy !== null && !$copy['ok']) {
+            $this->recordFailure($item, 'copy-check', ['detail' => CopyCheck::describe($copy)]);
+            return null;
+        }
+        $indexable = self::indexSpunPosts();
 
-        $postId = Database::transaction(function () use ($item, $members, $result, $indexable, $copy): int {
+        $postId = Database::transaction(function () use ($item, $members, $result, $indexable): int {
             $now = Date::now();
             $slug = $this->posts->uniqueSlug((string) $result['title']);
             $names = array_values(array_unique(array_column($result['sources'], 'name')));
@@ -328,8 +334,7 @@ final class NewsPublisher
                 'updated_at' => $now,
                 'created_at' => $now,
             ]);
-            $note = $copy !== null && !$copy['ok'] ? mb_substr('noindex: ' . CopyCheck::describe($copy), 0, 255) : null;
-            Database::update('news_items', ['status' => 'published', 'post_id' => $postId, 'note' => $note], 'id = ?', [(int) $item['id']]);
+            Database::update('news_items', ['status' => 'published', 'post_id' => $postId, 'note' => null], 'id = ?', [(int) $item['id']]);
             // Every other item of the story is covered now.
             foreach ($members as $member) {
                 if (in_array($member['status'], ['pending', 'failed'], true)) {
@@ -353,8 +358,7 @@ final class NewsPublisher
             'uniqueness' => $result['uniqueness'], 'sources' => $result['source_count'], 'words' => $result['words'],
             'indexable' => $indexable, 'shared_6grams' => $copy['shared'] ?? null, 'verbatim_run' => $copy['run'] ?? null,
         ]);
-        $this->message = sprintf('Yayınlandı: %s (özgünlük %%%s, %d kaynak).', $post['title'], number_format((float) $result['uniqueness'], 1, ',', ''), $result['source_count'])
-            . ($copy !== null && !$copy['ok'] ? ' Noindex: ' . CopyCheck::describe($copy) . '.' : '');
+        $this->message = sprintf('Yayınlandı: %s (özgünlük %%%s, %d kaynak).', $post['title'], number_format((float) $result['uniqueness'], 1, ',', ''), $result['source_count']);
         return (int) $postId;
     }
 
@@ -365,12 +369,14 @@ final class NewsPublisher
         $final = $reason !== 'no-text' && $reason !== 'error' || $attempts >= self::MAX_ATTEMPTS;
         $cluster = Clusterer::primaryFromNote($item['note'] ?? null);
         $note = ($cluster !== null ? 'cluster:' . $cluster . '; ' : '') . $reason
-            . (isset($result['uniqueness']) ? ' (' . $result['uniqueness'] . '%)' : '');
+            . (isset($result['uniqueness']) ? ' (' . $result['uniqueness'] . '%)' : '')
+            . (isset($result['detail']) ? ' (' . $result['detail'] . ')' : '');
         Database::update('news_items', [
             'status' => $final ? 'failed' : (string) $item['status'],
             'note' => mb_substr($note, 0, 255),
         ], 'id = ?', [(int) $item['id']]);
-        $this->message = (self::REASONS[$reason] ?? $reason) . (isset($result['uniqueness']) ? ' (%' . $result['uniqueness'] . ')' : '');
+        $this->message = (self::REASONS[$reason] ?? $reason) . (isset($result['uniqueness']) ? ' (%' . $result['uniqueness'] . ')' : '')
+            . (isset($result['detail']) ? ' (' . $result['detail'] . ')' : '');
         Log::info('news', 'item not published', ['item' => (int) $item['id'], 'reason' => $reason, 'uniqueness' => $result['uniqueness'] ?? null, 'words' => $result['words'] ?? null]);
     }
 

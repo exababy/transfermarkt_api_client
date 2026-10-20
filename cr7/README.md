@@ -306,8 +306,8 @@ değiştirilerek başka sitelerden alınan metni "kazınmış içerik" sayar ve 
 etkileyebilir. Bu yüzden yayın öncesi her yazı kaynaklarıyla yeniden ölçülür: kaynakla ortak kelime 6'lılarının
 oranı `spinner.max_shared_ngrams` (varsayılan **%10**) üstündeyse veya kaynaktan aynen alınmış en uzun dizi
 `spinner.max_verbatim_words` (varsayılan **12** kelime; 4+ kelimelik tırnak içi alıntılar sayılmaz) üstündeyse
-yazı yine yayınlanır ama **noindex** olur (site haritalarına ve IndexNow'a girmez). Haber Kuyruğu'ndaki notta
-ölçüm yazar; editör yazıya özgün bilgi ekleyip yazı formundaki "Arama motorlarında indekslensin" kutusunu işaretleyebilir.
+yazı **hiç yayınlanmaz** (panelden "Şimdi yayınla" ile zorlansa bile); kayıt `copy-check` notuyla başarısız sayılır
+ve Haber Kuyruğu'ndaki notta ölçüm yazar. Böylece kaynağın aynısı ya da ona çok yakın bir metin sitede asla yer almaz.
 
 **Ayarlar (panel → Ayarlar)**: günlük limit, iki yayın arası süre, yayın penceresi, en fazla haber yaşı,
 asgari özgünlük oranı, otomatik haberlerin indekslenmesi (kapatılırsa yeni otomatik yazılar `noindex` olur ve

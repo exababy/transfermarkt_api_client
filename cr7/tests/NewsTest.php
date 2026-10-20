@@ -112,6 +112,11 @@ final class NewsTest extends TestCase
         $this->assertSame('https://bozuk.test/a?x=1&y=2', $items[0]['link']);
         $this->assertSame([], FeedParser::parse('<html><body>not a feed</body></html>'));
         $this->assertSame([], FeedParser::parse(''));
+        // A literal "<" (entity-encoded in the feed) is text, not the start of a tag; real tags are still removed.
+        $lt = FeedParser::parse('<rss><channel><item><title>Ronaldo &lt;3 Georgina: aşk dolu paylaşım</title><link>https://x.test/k</link>'
+            . '<description>&lt;p&gt;Skor 2 &lt; 3 oldu, &lt;b&gt;Ronaldo&lt;/b&gt; attı.&lt;/p&gt;</description></item></channel></rss>');
+        $this->assertSame('Ronaldo <3 Georgina: aşk dolu paylaşım', $lt[0]['title'] ?? null);
+        $this->assertSame('Skor 2 < 3 oldu, Ronaldo attı.', $lt[0]['description'] ?? null);
     }
 
     public function testBingLinksAreDecoded(): void
@@ -220,18 +225,25 @@ final class NewsTest extends TestCase
             'Basın toplantısına katılan eski takım arkadaşları da Ronaldo’ya destek verdi. Cafu ve Roberto Carlos, efsane forvetin futbol bilgisi ve uluslararası tecrübesiyle yeni bir vizyon getireceğini belirtti.',
             "Uzmanlar, eski yıldızın kamuoyundaki popülerliğinin oy kullanacak eyalet federasyonları üzerinde de etkili olabileceğini ifade ediyor. Seçim takvimi önümüzdeki haftalarda netleşecek.",
         ]);
-        $hash = Clusterer::urlHash($url);
-        $this->cacheKeys[] = 'news:feedtext:' . $hash;
-        Cache::set('news:feedtext:' . $hash, $text, 600);
-        $id = Database::insert('news_items', [
-            'source' => 'aspor', 'source_name' => 'A Spor', 'url' => $url, 'url_hash' => $hash,
-            'title' => 'Ronaldo seçim kararını verdi: Federasyon başkanlığına aday', 'title_norm' => Str::normalize('Ronaldo seçim kararını verdi'),
-            'description' => 'Efsane golcü Ronaldo, seçimlerde aday olacağını açıkladı.', 'published_at' => Date::now(), 'fetched_at' => Date::now(), 'status' => 'pending',
-        ]);
-        $publisher = new NewsPublisher();
-        $this->assertNull($publisher->publishItem($id, true), 'not published: ' . $publisher->lastMessage());
-        $this->assertSame(0, (int) Database::fetchValue('SELECT COUNT(*) FROM posts'));
-        $this->assertSame(['failed', 'off-topic'], array_values(Database::fetchOne('SELECT status, note FROM news_items WHERE id = ?', [$id])));
+        // Neutral feed snippet, and a snippet that wrongly says "Portekizli": the lead text decides.
+        foreach (['Efsane golcü Ronaldo, seçimlerde aday olacağını açıkladı.', 'Portekizli yıldız Ronaldo, seçimlerde aday olacağını açıkladı.'] as $i => $description) {
+            $itemUrl = $url . '-' . $i;
+            $hash = Clusterer::urlHash($itemUrl);
+            $this->cacheKeys[] = 'news:feedtext:' . $hash;
+            Cache::set('news:feedtext:' . $hash, $text, 600);
+            $id = Database::insert('news_items', [
+                'source' => 'aspor', 'source_name' => 'A Spor', 'url' => $itemUrl, 'url_hash' => $hash,
+                'title' => 'Ronaldo seçim kararını verdi: Federasyon başkanlığına aday', 'title_norm' => Str::normalize('Ronaldo seçim kararını verdi') . $i,
+                'description' => $description, 'published_at' => Date::now(), 'fetched_at' => Date::now(), 'status' => 'pending',
+            ]);
+            $publisher = new NewsPublisher();
+            $this->assertNull($publisher->publishItem($id, true), 'not published: ' . $publisher->lastMessage());
+            $this->assertSame(0, (int) Database::fetchValue('SELECT COUNT(*) FROM posts'));
+            $this->assertSame(['failed', 'off-topic'], array_values(Database::fetchOne('SELECT status, note FROM news_items WHERE id = ?', [$id])));
+        }
+        $this->assertTrue(RelevanceFilter::aboutOtherRonaldo($text), 'Nazário text without a Cristiano marker');
+        $this->assertFalse(RelevanceFilter::aboutOtherRonaldo("Cristiano Ronaldo, Brezilyalı Ronaldo'nun rekorunu geçti."), 'names Cristiano');
+        $this->assertFalse(RelevanceFilter::aboutOtherRonaldo('Ronaldo iki gol attı, Al-Nassr kazandı.'), 'no other-Ronaldo marker');
     }
 
     public function testNoTextRetriesCountRealFetchesOnly(): void
@@ -409,6 +421,17 @@ final class NewsTest extends TestCase
         $this->assertSame([['name' => 'Ballon d’Or', 'slug' => 'ballon-dor', 'type' => 'award']], Tagger::fromColumn('Ballon d’Or, '));
         $this->assertSame('Portekiz Milli Takımı', Tagger::nameForSlug('portekiz-milli-takimi'));
         $this->assertSame('/takimlar/al-nassr', Tagger::clubPages()['Al-Nassr'] ?? null);
+
+        // Bare "Sporting" is Sporting CP, but other Sportings are not, and "Sporting CP" counts once.
+        $this->assertNotContains('Sporting CP', array_column(Tagger::tags('Sporting Braga deplasmanda kazandı', 'Sporting de Braga ve Sporting Gijón maçları oynandı.'), 'name'));
+        $this->assertContains('Sporting CP', array_column(Tagger::tags('Ronaldo eski takımı Sporting maçını izledi', 'Lizbon ekibi kazandı.'), 'name'));
+    }
+
+    public function testFeedDatesWithoutZoneAreIstanbulTime(): void
+    {
+        $this->assertSame('2026-10-01 11:00:00', FeedParser::parseDate('2026-10-01 14:00:00'), 'no zone => Europe/Istanbul');
+        $this->assertSame('2026-10-01 11:00:00', FeedParser::parseDate('2026-10-01T14:00:00+03:00'));
+        $this->assertSame('2026-10-01 14:00:00', FeedParser::parseDate('Thu, 01 Oct 2026 14:00:00 GMT'));
     }
 
     // ------------------------------------------------------------------ composing / publishing
@@ -570,7 +593,7 @@ final class NewsTest extends TestCase
         $this->assertContains('<meta name="robots" content="noindex,follow">', $response->body());
     }
 
-    public function testCopyCheckNoindexesNearVerbatimPosts(): void
+    public function testCopyCheckRejectsNearVerbatimPosts(): void
     {
         $source = 'Medyada çıkan haberler, İtalyan Milan kulübünün mevcut sahibi Amerikan şirketi RedBird Capital’in Al Nassr kulübünün hisselerinin yüzde 70’ini almak istediğini ortaya koymuştu. Ronaldo ise sessiz kaldı.';
         $copied = '<p>Basında yer alan haberler, İtalyan Milan kulübünün mevcut sahibi Amerikan şirketi "RedBird Capital"in Al Nassr kulübünün hisselerinin yüzde 70’ini almak istediğini gösterdi.</p>';
@@ -584,18 +607,18 @@ final class NewsTest extends TestCase
         $this->assertTrue(CopyCheck::measure($quote, [$source])['ok']);
         $this->assertTrue(CopyCheck::measure('<p>Portekizli yıldız dün akşam iki gol atarak takımını galibiyete taşıdı.</p>', [$source])['ok']);
 
-        // Publisher: a post failing the gate is published noindex, kept out of the sitemap, noted in the queue.
+        // Publisher: a post failing the gate is never published (even when forced); the queue notes why.
         Config::set('spinner.min_words', 150);
         Settings::set('spinner.max_verbatim_words', 1);
         Settings::flush();
         [$a] = $this->seedStory();
         $publisher = new NewsPublisher();
         $postId = $publisher->publishItem($a, true);
-        $this->assertTrue($postId !== null, $publisher->lastMessage());
-        $this->assertSame(0, (int) Database::fetchValue('SELECT is_indexable FROM posts WHERE id = ?', [$postId]));
-        $this->assertSame([], (new NewsRepository())->forSitemap());
-        $this->assertContains('noindex: kaynakla ortak', (string) Database::fetchValue('SELECT note FROM news_items WHERE id = ?', [$a]));
-        $this->assertContains('Noindex:', $publisher->lastMessage());
+        $this->assertSame(null, $postId, 'near-verbatim post must not be published');
+        $this->assertSame(0, (int) Database::fetchValue('SELECT COUNT(*) FROM posts'));
+        $this->assertSame('failed', (string) Database::fetchValue('SELECT status FROM news_items WHERE id = ?', [$a]));
+        $this->assertContains('copy-check (kaynakla ortak', (string) Database::fetchValue('SELECT note FROM news_items WHERE id = ?', [$a]));
+        $this->assertContains('kaynakla aynen örtüşen', $publisher->lastMessage());
     }
 
     public function testPostMetaTitleAndDescriptionLengths(): void
@@ -819,22 +842,24 @@ final class NewsTest extends TestCase
         $file = App::basePath('public/og/test-og-gorsel.png');
         $size = getimagesize($file);
         $this->assertSame([1200, 630, 'image/png'], [$size[0], $size[1], $size['mime']]);
-        // 640 px JPEG card for listings (srcset), written next to the PNG.
-        $this->assertSame('/og/test-og-gorsel-640.jpg', OgImage::variant($path));
-        $small = getimagesize(App::basePath('public/og/test-og-gorsel-640.jpg'));
-        $this->assertSame([640, 336, 'image/jpeg'], [$small[0], $small[1], $small['mime']]);
-        $this->assertTrue(filesize(App::basePath('public/og/test-og-gorsel-640.jpg')) < filesize($file), 'smaller than the PNG');
+        // 800 px headline-free JPEG brand card for listings, written next to the PNG.
+        $this->assertSame('/og/test-og-gorsel-800.jpg', OgImage::variant($path));
+        $small = getimagesize(App::basePath('public/og/test-og-gorsel-800.jpg'));
+        $this->assertSame([800, 420, 'image/jpeg'], [$small[0], $small[1], $small['mime']]);
+        $this->assertTrue(filesize(App::basePath('public/og/test-og-gorsel-800.jpg')) < filesize($file), 'smaller than the PNG');
         $this->assertNull(OgImage::variant('/assets/img/og-default.png'), 'only generated /og/ images');
-        // The first listing card is the LCP image: eager + fetchpriority=high, with the small card in srcset.
+        // The first listing card is the LCP image: eager + fetchpriority=high; it shows the brand card, not the headline PNG.
         $first = partial('partials/news-card', ['post' => ['title' => 'Ronaldo', 'url' => '/haber/x', 'image_url' => url($path)], 'priority' => true]);
         $this->assertContains('fetchpriority="high"', $first);
         $this->assertNotContains('loading="lazy"', $first);
-        $this->assertContains('srcset="' . url('/og/test-og-gorsel-640.jpg') . ' 640w, ' . url($path) . ' 1200w"', $first);
+        $this->assertContains('src="' . url('/og/test-og-gorsel-800.jpg') . '"', $first);
+        $this->assertContains('width="800" height="420"', $first);
+        $this->assertNotContains(url($path), $first, 'headline image is for og:image only');
         $this->assertContains('loading="lazy"', partial('partials/news-card', ['post' => ['title' => 'Ronaldo', 'url' => '/haber/x', 'image_url' => url($path)]]));
         $this->assertNotContains('loading="lazy"', partial('partials/news-card', ['post' => ['title' => 'Ronaldo', 'url' => '/haber/x', 'image_url' => url($path)], 'lazy' => false]));
         OgImage::delete($path);
         $this->assertFalse(is_file($file));
-        $this->assertFalse(is_file(App::basePath('public/og/test-og-gorsel-640.jpg')), 'variant deleted with the image');
+        $this->assertFalse(is_file(App::basePath('public/og/test-og-gorsel-800.jpg')), 'variant deleted with the image');
         OgImage::delete('/../config/config.example.php');
         $this->assertTrue(is_file(App::basePath('config/config.example.php')), 'delete is confined to public/og');
         $lines = OgImage::wrap('bir iki üç dört beş altı yedi', App::basePath('public/assets/fonts/DejaVuSans-Bold.ttf'), 40, 300);

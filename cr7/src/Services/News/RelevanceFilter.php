@@ -89,6 +89,18 @@ final class RelevanceFilter
         return self::mentions($lower) && self::containsAny($lower, self::CRISTIANO);
     }
 
+    /**
+     * True when an article text is about another Ronaldo: it carries an other-Ronaldo marker
+     * (Nazário, "Brezilya'nın efsane golcüsü Ronaldo", CBF, Cruzeiro …) and names Cristiano
+     * nowhere itself. Applied to the lead source text, which becomes the post body, so a feed
+     * snippet that happens to say "Portekizli" cannot carry a Nazário article through.
+     */
+    public static function aboutOtherRonaldo(string $text): bool
+    {
+        $lower = Str::lower($text);
+        return self::pointsToOtherRonaldo($lower) && !self::containsAny($lower, self::CRISTIANO);
+    }
+
     private static function pointsToOtherRonaldo(string $lower): bool
     {
         if (preg_match(self::OTHER_RONALDO_PATTERN, $lower) === 1) {

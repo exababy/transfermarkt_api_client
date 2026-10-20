@@ -85,6 +85,14 @@ final class Tagger
     public const MAX_TAGS = 6;
 
     /**
+     * Extra lookaheads for ambiguous bare aliases: "Sporting" alone is Sporting CP, but not in
+     * "Sporting CP"/"Sporting Lizbon" (already counted) or other Sportings (Braga, Gijón, Kansas City …).
+     */
+    private const NOT_FOLLOWED_BY = [
+        'Sporting' => '(?!\s+(?:CP|Lizbon|(?:(?:Clube\s+)?de\s+)?Braga|Gij[oó]n|Kansas|Cristal|Charleroi))',
+    ];
+
+    /**
      * Tags for a story, most relevant first (title mentions weigh more than body mentions).
      *
      * @return list<array{name: string, slug: string, type: string}>
@@ -95,7 +103,8 @@ final class Tagger
         foreach (self::TAGS as $name => [$type, $aliases]) {
             $score = 0;
             foreach ($aliases as $alias) {
-                $pattern = '/(?<![\p{L}\p{N}])' . preg_quote($alias, '/') . '(?![\p{L}\p{N}])/u';
+                $pattern = '/(?<![\p{L}\p{N}])' . preg_quote($alias, '/') . '(?![\p{L}\p{N}])'
+                    . (self::NOT_FOLLOWED_BY[$alias] ?? '') . '/u';
                 $score += 3 * preg_match_all($pattern, $title) + preg_match_all($pattern, $text);
             }
             if ($score >= 2) { // a title mention or at least two mentions in the text
