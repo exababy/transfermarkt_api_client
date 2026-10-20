@@ -94,11 +94,100 @@
     });
   }
 
+
+  /* Character counters: <input data-counter="160" [data-counter-soft]> (soft = recommendation only). */
+  function initCounters() {
+    each('[data-counter]', function (input) {
+      var max = parseInt(input.getAttribute('data-counter'), 10) || 0;
+      if (!max) return;
+      var soft = input.hasAttribute('data-counter-soft');
+      var counter = doc.createElement('span');
+      counter.className = 'char-counter';
+      counter.setAttribute('aria-live', 'polite');
+      var anchor = input.parentNode && input.parentNode.classList.contains('password-field') ? input.parentNode : input;
+      anchor.parentNode.insertBefore(counter, anchor.nextSibling);
+      function render() {
+        var length = Array.from ? Array.from(input.value).length : input.value.length;
+        counter.textContent = length + ' / ' + max + (soft ? ' önerilen' : '');
+        counter.classList.toggle('is-over', length > max);
+        counter.classList.toggle('is-near', length <= max && length > max * 0.9);
+      }
+      input.addEventListener('input', render);
+      render();
+    });
+  }
+
+  /* Copy buttons: <button data-copy="#field"> */
+  function initCopy() {
+    each('[data-copy]', function (btn) {
+      btn.addEventListener('click', function () {
+        var target = doc.querySelector(btn.getAttribute('data-copy'));
+        if (!target) return;
+        var text = 'value' in target ? target.value : target.textContent;
+        var label = btn.textContent;
+        function done(ok) {
+          btn.textContent = ok ? 'Kopyalandı ✓' : 'Kopyalanamadı';
+          setTimeout(function () { btn.textContent = label; }, 1600);
+        }
+        function fallback() {
+          if (target.select) target.select();
+          var ok = false;
+          try { ok = doc.execCommand('copy'); } catch (err) { ok = false; }
+          done(ok);
+        }
+        if (navigator.clipboard && window.isSecureContext) {
+          navigator.clipboard.writeText(text).then(function () { done(true); }, fallback);
+          return;
+        }
+        fallback();
+      });
+    });
+  }
+
+  /* Filter selects/checkboxes that submit their form on change: <select data-autosubmit> */
+  function initAutosubmit() {
+    each('[data-autosubmit]', function (field) {
+      field.addEventListener('change', function () {
+        var form = field.form;
+        if (!form) return;
+        if (form.requestSubmit) form.requestSubmit(); else form.submit();
+      });
+    });
+  }
+
+  /* Confirmation on single buttons (e.g. buttons submitting another form): <button data-confirm-click="…"> */
+  function initConfirmClick() {
+    doc.addEventListener('click', function (e) {
+      var btn = e.target && e.target.closest ? e.target.closest('[data-confirm-click]') : null;
+      if (btn && !window.confirm(btn.getAttribute('data-confirm-click'))) e.preventDefault();
+    });
+  }
+
+  /* Long-running actions: <form data-busy="Çalışıyor…"> disables its buttons once submitted. */
+  function initBusy() {
+    doc.addEventListener('submit', function (e) {
+      var form = e.target;
+      if (e.defaultPrevented || !form || !form.hasAttribute || !form.hasAttribute('data-busy')) return;
+      if (form.getAttribute('aria-busy') === 'true') { e.preventDefault(); return; }
+      form.setAttribute('aria-busy', 'true');
+      var text = form.getAttribute('data-busy');
+      Array.prototype.forEach.call(form.querySelectorAll('button[type="submit"], button:not([type])'), function (btn) {
+        btn.textContent = text;
+        setTimeout(function () { btn.disabled = true; }, 0);
+      });
+    });
+  }
+
   function init() {
     initConfirm();
     initSlug();
     initSidebar();
     initPasswordToggles();
+    initCounters();
+    initCopy();
+    initAutosubmit();
+    initConfirmClick();
+    initBusy();
   }
 
   if (doc.readyState === 'loading') doc.addEventListener('DOMContentLoaded', init);

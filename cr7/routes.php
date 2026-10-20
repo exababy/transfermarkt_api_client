@@ -112,4 +112,10 @@ return static function (Router $r): void {
 
     $r->get('/admin/odeme-ayarlari', [Admin\ProductsController::class, 'paymentSettings']);
     $r->post('/admin/odeme-ayarlari', [Admin\ProductsController::class, 'savePaymentSettings']);
+
+    // --- shop legal pages ---
+    $r->get('/mesafeli-satis-sozlesmesi', [ShopController::class, 'distanceSales']);
+    $r->get('/on-bilgilendirme-formu', [ShopController::class, 'preInfo']);
+    $r->get('/iptal-ve-iade', [ShopController::class, 'returns']);
+    // --- /shop legal pages ---
 };

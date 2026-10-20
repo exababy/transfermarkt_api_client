@@ -1,0 +1,7 @@
+# Product photo uploads: serve images only, never execute scripts.
+<FilesMatch "\.(?i:php\d?|phtml|phar|pl|py|cgi|sh|shtml|htaccess)$">
+    Require all denied
+</FilesMatch>
+<IfModule mod_headers.c>
+    Header set X-Content-Type-Options "nosniff"
+</IfModule>

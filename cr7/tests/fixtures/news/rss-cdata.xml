@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0" xmlns:media="http://search.yahoo.com/mrss/" xmlns:content="http://purl.org/rss/1.0/modules/content/">
+<channel>
+<title>Örnek Spor</title>
+<link>https://ornek-spor.test/</link>
+<item>
+  <title><![CDATA[Ronaldo'dan Al-Nassr'a 2-1'lik galibiyet & rekor!]]></title>
+  <link>https://ornek-spor.test/haber/ronaldo-rekor-123?utm_source=rss&amp;utm_medium=feed&amp;id=7</link>
+  <guid isPermaLink="true">https://ornek-spor.test/haber/ronaldo-rekor-123</guid>
+  <description><![CDATA[<img src="https://img.ornek-spor.test/r.jpg"/>Cristiano Ronaldo, Al-Hilal maçında iki gol attı&nbsp;ve takımını zirveye taşıdı. <a href="https://ornek-spor.test/x">Devamı için tıklayınız</a>]]></description>
+  <content:encoded><![CDATA[<p>Cristiano Ronaldo, Al-Hilal maçında iki gol attı ve takımını zirveye taşıdı.</p><p>Portekizli yıldız maçın ardından “Çok mutluyum” dedi.</p>]]></content:encoded>
+  <pubDate>Tue, 20 Oct 2026 10:15:00 +0300</pubDate>
+  <media:content url="https://img.ornek-spor.test/r-big.jpg" medium="image" type="image/jpeg"/>
+</item>
+<item>
+  <title>Fenerbahçe &amp; Galatasaray derbisinin tarihi belli oldu</title>
+  <link>https://ornek-spor.test/haber/derbi-456</link>
+  <description>Derbi 26 Ekim'de oynanacak &ccedil;ok &ouml;nemli ma&ccedil; &hellip;</description>
+  <pubDate>Tue, 20 Oct 2026 09:00:00 GMT</pubDate>
+  <enclosure url="https://img.ornek-spor.test/d.jpg" length="100" type="image/jpeg"/>
+</item>
+</channel>
+</rss>

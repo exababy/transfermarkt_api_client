@@ -1,0 +1,6 @@
+   <?xml version="1.0" encoding="utf-8"?>
+<rss version="2.0"><channel><title>Bozuk</title>
+<item><title>Ronaldo & Messi yine aynı listede</title><link>https://bozuk.test/a?x=1&y=2</link><description>Kırık <b>HTML açıklama</description><pubDate>Mon, 19 Oct 2026 08:32:00 GMT</pubDate></item>
+<item><title>CR7 rekor kırdı</title><link>https://bozuk.test/b</link><description>Açıklama &nbsp; burada &copy; 2026</description></item>
+<item><title>Kapanmayan öğe</title><link>https://bozuk.test/c</link>
+</channel>

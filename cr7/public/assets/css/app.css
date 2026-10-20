@@ -509,3 +509,10 @@ button { font: inherit; }
   body { background: #fff; color: #000; }
   .prose { color: #000; }
 }
+
+/* === stats === */
+.chart{container-type:inline-size;margin-inline:0}.chart .st{display:none}.chart .st-s{display:block}.chart .st text{font-size:13px}
+@container (min-width:460px){.chart .st-s{display:none}.chart .st-m{display:block}}
+@container (min-width:760px){.chart .st-m{display:none}.chart .st-l{display:block}}
+.st-hit:hover .st-mark{fill:var(--gold)}.table-wrap{position:relative}.chart-table{margin-top:12px}.chart-table .table-wrap{margin-top:10px}
+.page-stats img[class*=logo]{filter:drop-shadow(0 0 1px rgba(255,255,255,.7))}.page-stats .logo-xs{padding:2px;border-radius:5px;background:#ececf1;filter:none}

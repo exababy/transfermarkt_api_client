@@ -5,10 +5,11 @@ declare(strict_types=1);
 namespace App\Cron\Tasks;
 
 use App\Cron\Task;
+use App\Services\News\NewsPublisher;
 
 /**
- * Publishes spun news posts within the daily limit, interval and window (news module).
- * Stub created by the foundation; replaced by the owning module.
+ * Publishes at most one spun news post per run; the publisher itself enforces the daily limit
+ * (news.daily_limit, Istanbul day), the minimum interval and the publish window.
  */
 final class NewsPublishTask implements Task
 {
@@ -24,6 +25,8 @@ final class NewsPublishTask implements Task
 
     public function run(): string
     {
-        return 'not implemented';
+        $publisher = new NewsPublisher();
+        $postId = $publisher->publishNext();
+        return ($postId !== null ? "#{$postId} " : '') . $publisher->lastMessage();
     }
 }
