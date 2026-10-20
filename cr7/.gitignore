@@ -1,0 +1,21 @@
+# Dependencies (none required; kept out of git if someone runs composer)
+/vendor/
+
+# Real configuration (contains secrets) — copy config/config.example.php
+/config/config.php
+
+# Runtime data (directories are kept via .gitkeep)
+/storage/*
+!/storage/.gitkeep
+!/storage/cache/
+!/storage/logs/
+!/storage/locks/
+/storage/cache/*
+/storage/logs/*
+/storage/locks/*
+!/storage/cache/.gitkeep
+!/storage/logs/.gitkeep
+!/storage/locks/.gitkeep
+
+# Generated Open Graph images
+/public/og/*.png
