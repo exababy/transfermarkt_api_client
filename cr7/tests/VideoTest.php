@@ -20,6 +20,7 @@ use App\Services\Video\VideoText;
 use App\Services\Video\YouTubeApi;
 use App\Services\Video\YouTubeFeed;
 use App\Support\Cache;
+use App\Support\Date;
 
 final class VideoTest extends TestCase
 {
@@ -90,6 +91,21 @@ final class VideoTest extends TestCase
         $this->assertSame('Ronaldo scored the goal number 980 🐐⚽️', VideoText::cleanTitle('#Ronaldo scored the goal number 980 🐐⚽️ #shorts #alnassr #النصر'));
         $this->assertSame('Ronaldo & Benzema', VideoText::cleanTitle("  Ronaldo &amp; Benzema\n "));
         $this->assertSame('shorts', VideoText::cleanTitle('#shorts'), 'a title made only of hashtags is not emptied');
+        // Unicode-aware trim: a trailing emoji survives (the byte-wise trim left "… KEEPER ?").
+        $this->assertSame('DYBALA & RONALDO vs THE KEEPER 👀', VideoText::cleanTitle("DYBALA &amp; RONALDO vs THE KEEPER \u{1F440}"));
+        $this->assertSame('Here we go 🚀🚀🚀', VideoText::cleanTitle("Here we go \u{1F680}\u{1F680}\u{1F680}"));
+        $this->assertSame('Ronaldo – Messi', VideoText::cleanTitle('— Ronaldo – Messi – | '));
+        $this->assertSame('DYBALA & RONALDO vs THE KEEPER 👀', VideoSync::repairedTitle('DYBALA & RONALDO vs THE KEEPER ?', "DYBALA &amp; RONALDO vs THE KEEPER \u{1F440}"));
+        $this->assertNull(VideoSync::repairedTitle('Ronaldo’nun en iyi golü hangisi?', 'Best goals 🔥'), 'admin titles are kept');
+        $this->assertNull(VideoSync::repairedTitle('Is he the GOAT?', 'Is he the GOAT?'));
+
+        // Turkish titles make a watch page indexable; channel titles in other languages do not.
+        foreach (['Ronaldo’nun Juventus’a Attığı Efsane Rövaşata Golü', 'CR7 ve Pelé’nin Duygusal Gecesi', 'Juventus 3-0 Atlético | Ronaldo’dan Hat-trick', 'Cristiano Ronaldo Nasıl Futbolcu Oldu?'] as $tr) {
+            $this->assertTrue(VideoText::looksTurkish($tr), $tr);
+        }
+        foreach (['NEXT STOP: MIAMI 🇵🇹', 'COMEÇA HOJE!💥 O MUNDIAL É NO YOUTUBE', 'RONALDO MISSES… MANDŽUKIĆ DOESN’T!', 'Greatness isn’t given | Esports World Cup 2026', 'كواليس فوزنا في ملعبنا', 'Ballon d’Or 2013'] as $foreign) {
+            $this->assertFalse(VideoText::looksTurkish($foreign), $foreign);
+        }
     }
 
     public function testSlugsAreTurkishAndUnique(): void
@@ -337,6 +353,7 @@ final class VideoTest extends TestCase
 
         // Second run: nothing new; the unembeddable video is remembered and not looked up again.
         $repo->update($ur['id'], ['title' => 'Admin başlığı', 'category' => 'genel']);
+        Database::update('videos', ['updated_at' => '2026-10-01 12:00:00'], 'id = ?', [$ur['id']]);
         $before = count($oembedRequests);
         $feeds[self::UR] = str_replace('<media:statistics views="1000"/>', '<media:statistics views="2500"/>', $feeds[self::UR]);
         $second = $sync->run();
@@ -347,10 +364,63 @@ final class VideoTest extends TestCase
         $this->assertSame('Admin başlığı', $ur['title'], 'admin edits are kept');
         $this->assertSame('genel', $ur['category']);
         $this->assertSame(2500, $ur['view_count']);
+        $this->assertSame('2026-10-01 12:00:00', $ur['updated_at'], 'a view count alone does not move lastmod');
 
         // Every feed failing => the task reports an error.
         $broken = new VideoSync(new YouTubeFeed(static fn (string $url): array => ['status' => 0, 'body' => '', 'error' => 'timeout']), new YouTubeApi(''), $importer);
         $this->assertThrows(\RuntimeException::class, static fn () => $broken->run());
+    }
+
+    public function testSyncDropsOffTopicUploadsAndKeepsLatinPartOfBilingualTitles(): void
+    {
+        $this->assertTrue(Categorizer::isOffTopic('🔴 LIVE | AMAZING MMA EVENT 🔥 WOW 32: The Future of MMA 🥊'));
+        $this->assertTrue(Categorizer::isOffTopic('THIS SATURDAY. LIVE. ON UR 🥊 WOW 🔥'));
+        $this->assertTrue(Categorizer::isOffTopic('Greatness isn’t given | Esports World Cup 2026'));
+        $this->assertFalse(Categorizer::isOffTopic('Ronaldo scored the goal number 980'));
+        $this->assertFalse(Categorizer::isOffTopic('Cristiano Ronaldo x Céline Dept: THE FULL MEETING'));
+        $this->assertSame('Ronaldo & Alhamdan Seal the Win', VideoText::latinSegment('كواليس فوزنا في ملعبنا بهدفي رونالدو والحمدان 💛 Ronaldo & Alhamdan Seal the Win'));
+        $this->assertSame('BTS of AlNassr win by Ronaldo and Samu goals', VideoText::latinSegment('فوز على التعاون بهدفي سامو ورونالدو - كواليس المباراة 💛 BTS of AlNassr win by Ronaldo and Samu goals'));
+        $this->assertSame('هدف رونالدو', VideoText::latinSegment('هدف رونالدو'), 'no Latin part: unchanged');
+        $this->assertSame('Ronaldo’nun golü 🐐', VideoText::latinSegment('Ronaldo’nun golü 🐐'), 'no Arabic: unchanged');
+
+        // Imported before the rules existed: an MMA promo (rss), the same kind added by hand, a bilingual title.
+        $now = Date::now();
+        $row = static fn (string $id, string $title, string $source): array => [
+            'youtube_id' => $id, 'slug' => strtolower($id), 'title' => $title, 'source' => $source, 'status' => 'published',
+            'category' => 'ur-cristiano', 'published_at' => $now, 'created_at' => $now, 'updated_at' => $now,
+        ];
+        Database::insert('videos', $row('OldMma00001', 'This SATURDAY, the Future of MMA goes LIVE on UR. 🥊', 'rss'));
+        Database::insert('videos', $row('HandMma0001', 'UFC gecesinde Ronaldo', 'manual'));
+        Database::insert('videos', $row('OldBiling01', 'كواليس فوزنا 💛 Ronaldo and Alhamdan Seal the Win', 'rss'));
+
+        Config::set('youtube.channels', [['id' => self::UR, 'name' => 'UR · Cristiano', 'filter' => false]]);
+        $feeds = [
+            self::UR => self::feedXml(self::UR, 'UR · Cristiano', [
+                ['UrMma000001', '🔴 LIVE | AMAZING MMA EVENT 🔥 WOW 32', '', '2026-10-01T10:00:00+00:00', 1000, false],
+                ['UrVideo0002', 'One team; one dream 🇵🇹', '', '2026-10-02T10:00:00+00:00', 1000, false],
+            ]),
+            'UCHEQtltsiDd3p8ga-5nC-ow' => self::feedXml('UCHEQtltsiDd3p8ga-5nC-ow', 'Al Nassr FC', [
+                ['NassrBil001', 'فوز على التعاون بهدفي سامو ورونالدو 💛 BTS of AlNassr win by Ronaldo and Samu goals', '', '2026-10-03T10:00:00+00:00', 10, false],
+            ]),
+        ];
+        $feed = new YouTubeFeed(static fn (string $url): array => ['status' => 200, 'body' => $feeds[substr($url, strlen(YouTubeFeed::URL))] ?? self::feedXml(substr($url, strlen(YouTubeFeed::URL)), 'Boş kanal', []), 'error' => null]);
+        $requested = [];
+        $sync = new VideoSync($feed, new YouTubeApi(''), new VideoImporter(new YouTubeApi(''), self::oembedFake($requested)));
+        $stats = $sync->run();
+
+        $repo = new VideoRepository();
+        $this->assertNull($repo->findByYoutubeId('UrMma000001'), 'off-topic upload is not imported');
+        $this->assertSame('published', $repo->findByYoutubeId('UrVideo0002')['status']);
+        $this->assertSame('BTS of AlNassr win by Ronaldo and Samu goals', $repo->findByYoutubeId('NassrBil001')['title']);
+        $this->assertSame('hidden', $repo->findByYoutubeId('OldMma00001')['status'], 'already imported promo is hidden');
+        $this->assertSame('published', $repo->findByYoutubeId('HandMma0001')['status'], 'manual videos are never touched');
+        $this->assertSame('Ronaldo and Alhamdan Seal the Win', $repo->findByYoutubeId('OldBiling01')['title']);
+        $this->assertSame(2, $stats['new']);
+
+        // An admin publishes the hidden promo again: later syncs leave it alone.
+        Database::update('videos', ['status' => 'published'], 'youtube_id = ?', ['OldMma00001']);
+        $sync->run();
+        $this->assertSame('published', $repo->findByYoutubeId('OldMma00001')['status']);
     }
 
     public function testChannelListMergesConfig(): void
@@ -477,6 +547,11 @@ final class VideoTest extends TestCase
         foreach (['/videolar?kategori=yok', '/videolar?sayfa=3', '/videolar?sayfa=0', '/videolar?sayfa=abc', '/videolar?kategori[]=x', '/video/yok-boyle-video', '/video/yok-zzzzz'] as $path) {
             $this->assertSame(404, $this->get($path)->status(), $path);
         }
+        foreach (['/videolar?sayfa=1' => '/videolar', '/videolar?kategori=goller&sayfa=1' => '/videolar?kategori=goller'] as $path => $target) {
+            $first = $this->get($path);
+            $this->assertSame(301, $first->status(), $path);
+            $this->assertSame(url($target), $first->header('Location'));
+        }
 
         // Pagination: 30 seeded + 20 more => 3 pages of 24.
         $repo = new VideoRepository();
@@ -500,11 +575,19 @@ final class VideoTest extends TestCase
         $this->assertContains('"contentUrl":"https://www.youtube.com/watch?v=c_JlCriK3fY"', $html);
         $this->assertContains('"duration":"PT1M44S"', $html);
         $this->assertContains('"uploadDate":"2020-04-01T15:00:00+03:00"', $html);
-        $this->assertContains('"thumbnailUrl":["https://i.ytimg.com/vi/c_JlCriK3fY/hqdefault.jpg"', $html);
+        // Curated videos use the 1280x720 maxres thumbnail (large previews / Discover), declared with its size.
+        $this->assertContains('"thumbnailUrl":["https://i.ytimg.com/vi/c_JlCriK3fY/maxresdefault.jpg","https://i.ytimg.com/vi/c_JlCriK3fY/hqdefault.jpg"', $html);
+        $this->assertContains('<meta property="og:image" content="https://i.ytimg.com/vi/c_JlCriK3fY/maxresdefault.jpg">', $html);
+        $this->assertContains('<meta property="og:image:width" content="1280">', $html);
+        $this->assertSame([480, 360], VideoText::thumbnailSize('https://i.ytimg.com/vi/x/hqdefault.jpg'));
         $this->assertContains('"publisher":{"@type":"Organization","name":"Real Madrid"', $html);
         $this->assertContains('"@type":"BreadcrumbList"', $html);
-        $this->assertContains('data-youtube-id="c_JlCriK3fY"', $html, 'facade embed');
-        $this->assertNotContains('<iframe', $html, 'no YouTube iframe before the click');
+        // Google indexes a video only when its player is in the page without a click (SEO-01):
+        // the watch page ships the youtube-nocookie iframe, not the click-to-load facade.
+        $this->assertTrue(preg_match('#<div class="video-embed is-playing">\s*<iframe src="https://www\.youtube-nocookie\.com/embed/c_JlCriK3fY\?rel=0" title="[^"]+"[^>]*allowfullscreen></iframe>#', $html) === 1, 'server-rendered player iframe');
+        $this->assertSame(1, substr_count($html, '<iframe'), 'exactly one player');
+        $this->assertNotContains('data-youtube-id="c_JlCriK3fY"', $html, 'no click-to-load facade on the watch page');
+        $this->assertNotContains('rel="preload" as="image"', $html, 'no preload workaround needed');
         $this->assertContains('<meta property="og:type" content="video.other">', $html);
         $this->assertContains('Benzer Videolar', $html);
         $this->assertContains('<link rel="canonical" href="' . url($video['url']) . '">', $html);
@@ -520,6 +603,15 @@ final class VideoTest extends TestCase
         $this->assertPageBasics($plain, 'plain');
         $this->assertContains('"description":"“Ronaldo antrenmanda” videosu Juventus kanalına ait.', $plain);
         $this->assertNotContains('"duration":"PT', $plain);
+        $this->assertContains('<meta name="robots" content="index,follow,max-image-preview:large,max-video-preview:-1">', $html);
+
+        // Auto-imported foreign-language title: the watch page is noindex and out of the video sitemap.
+        $repo->create(['youtube_id' => 'Foreign0001', 'title' => 'NEXT STOP: MIAMI 🇵🇹', 'channel_title' => 'UR · Cristiano', 'source' => 'rss']);
+        $foreign = $repo->findByYoutubeId('Foreign0001');
+        $this->assertFalse($foreign['is_indexable']);
+        $this->assertContains('<meta name="robots" content="noindex,follow">', $this->get($foreign['url'])->body());
+        $this->assertNotContains(url($foreign['url']), array_column($repo->forSitemap(), 'url'));
+        $this->assertContains(url($video['url']), array_column($repo->forSitemap(), 'url'));
     }
 
     public function testEmptyGalleryIsNoindex(): void

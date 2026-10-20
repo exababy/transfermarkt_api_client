@@ -75,6 +75,7 @@ final class PaymentController
         $response = Response::html(View::render('pages/payment', [
             'seo' => $seo,
             'activeNav' => 'magaza',
+            'noAnalytics' => true, // the URL key opens the buyer's personal data
             'extraHead' => ShopController::styles(),
             'order' => $order,
             'payment' => $payment,
@@ -126,6 +127,7 @@ final class PaymentController
             $order['payment_status'] === 'odendi' => 'paid',
             $order['payment_status'] === 'basarisiz' || ($failedRedirect && $order['payment_status'] === 'bekliyor') => 'failed',
             $order['payment_method'] === 'havale' => 'transfer',
+            !empty($order['payload']['review']) => 'review', // reported by the gateway, confirmed by the owner
             default => 'pending',
         };
         $recent = strtotime((string) $order['created_at'] . ' UTC') > time() - 1800;
@@ -142,6 +144,7 @@ final class PaymentController
         return ShopController::private(Response::html(View::render('pages/payment-result', [
             'seo' => $seo,
             'activeNav' => 'magaza',
+            'noAnalytics' => true,
             // Online payments: the gateway notification may arrive a few seconds after the redirect.
             'extraHead' => ShopController::styles() . ($state === 'pending' && $recent ? '<meta http-equiv="refresh" content="8">' : ''),
             'order' => $order,

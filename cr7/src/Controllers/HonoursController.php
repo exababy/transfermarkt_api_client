@@ -9,6 +9,7 @@ use App\Core\Response;
 use App\Core\Seo;
 use App\Repositories\ClubRepository;
 use App\Support\Format;
+use App\Support\OgImage;
 use App\Support\Str;
 
 /**
@@ -76,13 +77,16 @@ final class HonoursController
             )
             : 'Cristiano Ronaldo’nun kazandığı tüm kupalar, Ballon d’Or ve Altın Ayakkabı gibi bireysel ödülleri, gol krallıkları ve kırdığı rekorların güncel listesi.';
 
+        $card = OgImage::page('kupalar-ve-oduller', 'Cristiano Ronaldo’nun Kupaları ve Ödülleri', 'Kupalar, ödüller, rekorlar', 'KUPALAR');
         $seo = new Seo(
             title: 'Cristiano Ronaldo’nun Kupaları ve Ödülleri: Tam Liste',
             description: Str::limit($description, 160),
             canonical: url('/kupalar-ve-oduller'),
+            image: $card,
             jsonLd: $jsonLd,
             breadcrumbs: [['name' => 'Kupalar ve Ödüller', 'url' => '/kupalar-ve-oduller']],
             modifiedTime: $reviewed !== null ? Format::iso($reviewed) : null,
+            extraMeta: OgImage::meta($card),
         );
 
         return view('pages/honours', [

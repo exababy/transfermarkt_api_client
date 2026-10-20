@@ -18,7 +18,7 @@ use App\Support\Str;
 final class Installer
 {
     public const USERNAME_PATTERN = '/^[A-Za-z0-9_.-]{3,50}$/';
-    public const MIN_PASSWORD_LENGTH = 8;
+    public const MIN_PASSWORD_LENGTH = 10; // same rule as the admin password change (AuthController)
 
     /** @var list<string> */
     private array $log = [];
@@ -97,7 +97,7 @@ final class Installer
         if (preg_match(self::USERNAME_PATTERN, $username) !== 1) {
             throw new \InvalidArgumentException('Kullanıcı adı 3-50 karakter olmalı (harf, rakam, _ . -).');
         }
-        if ($password !== null && strlen($password) < self::MIN_PASSWORD_LENGTH) {
+        if ($password !== null && mb_strlen($password) < self::MIN_PASSWORD_LENGTH) {
             throw new \InvalidArgumentException('Şifre en az ' . self::MIN_PASSWORD_LENGTH . ' karakter olmalı.');
         }
         $existing = Database::fetchOne('SELECT id FROM users WHERE username = ?', [$username]);

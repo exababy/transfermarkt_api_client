@@ -69,6 +69,9 @@ $feeText = static function (array $t): string {
 <section class="section-sm" aria-labelledby="kariyer-ozet">
   <div class="container stack">
     <h2 class="visually-hidden" id="kariyer-ozet">Kariyer özeti</h2>
+    <?php if ((int) $career['appearances'] === 0 && (int) $national['games'] === 0): ?>
+    <?= partial('partials/stats-empty', ['text' => 'Kariyer boyunca oynadığı maçlar, goller ve asistler Transfermarkt ile ilk senkronizasyondan sonra burada görünecek.']) ?>
+    <?php else: ?>
     <div class="stat-tiles">
       <?= partial('partials/stat-tile', ['value' => $career['appearances'], 'label' => 'Resmî maç', 'sub' => 'Tüm takımlar']) ?>
       <?= partial('partials/stat-tile', ['value' => $career['goals'], 'label' => 'Gol', 'sub' => 'Maç başına ' . Format::number($goalsPerGame, 2)]) ?>
@@ -76,6 +79,7 @@ $feeText = static function (array $t): string {
       <?= partial('partials/stat-tile', ['value' => $clubTotals['goals'], 'label' => 'Kulüp golü', 'sub' => Format::number($clubTotals['appearances']) . ' maçta']) ?>
       <?= partial('partials/stat-tile', ['value' => $national['goals'], 'label' => 'Milli gol', 'sub' => Format::number($national['games']) . ' maçta']) ?>
     </div>
+    <?php endif; ?>
     <p class="meta"><span>Kaynak: Transfermarkt</span><?php if ($lastSync): ?><span>Son güncelleme: <time datetime="<?= e(Format::iso($lastSync)) ?>"><?= e(Format::date($lastSync, 'j F Y H:i')) ?></time></span><?php endif; ?><span>Toplamlara genç milli takımlar dahildir</span></p>
     <?php if (!empty($narrative['intro'])): ?>
     <div class="prose"><?= $narrative['intro'] ?></div>
@@ -124,12 +128,14 @@ $feeText = static function (array $t): string {
               </div>
             </div>
             <?php if ($spell['summary'] !== ''): ?><p class="card-text"><?= e($spell['summary']) ?></p><?php endif; ?>
+            <?php if ($spell['appearances'] > 0): // no "0 Maç" rows before the first sync ?>
             <div class="club-card-stats" style="justify-content:flex-start">
               <span><strong><?= e(Format::number($spell['appearances'])) ?></strong>Maç</span>
               <span><strong><?= e(Format::number($spell['goals'])) ?></strong>Gol</span>
               <span><strong><?= e(Format::number($spell['assists'])) ?></strong>Asist</span>
               <span><strong><?= e(Format::number($spell['minutes'])) ?></strong>Dakika</span>
             </div>
+            <?php endif; ?>
           </div>
         </div>
       </li>
@@ -147,10 +153,12 @@ $feeText = static function (array $t): string {
               </div>
             </div>
             <?php if (!empty($nationalContent['summary'])): ?><p class="card-text"><?= e($nationalContent['summary']) ?></p><?php endif; ?>
+            <?php if ($national['games'] > 0): ?>
             <div class="club-card-stats" style="justify-content:flex-start">
               <span><strong><?= e(Format::number($national['games'])) ?></strong>Maç</span>
               <span><strong><?= e(Format::number($national['goals'])) ?></strong>Gol</span>
             </div>
+            <?php endif; ?>
           </div>
         </div>
       </li>

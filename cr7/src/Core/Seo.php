@@ -15,6 +15,12 @@ final class Seo
 {
     public const DEFAULT_IMAGE = '/assets/img/og-default.png';
 
+    /**
+     * Thin-content rule shared by every filtered listing (news tags, video categories, shop club
+     * filters): fewer items => noindex,follow and not in the sitemap.
+     */
+    public const LISTING_INDEX_MIN = 3;
+
     public function __construct(
         public string $title,
         public string $description = '',

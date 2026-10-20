@@ -119,6 +119,31 @@ final class ShopTest extends TestCase
         $this->assertSame('basarisiz', (new OrderRepository())->find($order['id'])['payment_status']);
     }
 
+    public function testPaytrTestModeIsOffByDefaultAndTestPaymentsAreNotBookedLive(): void
+    {
+        $this->assertFalse((new PaytrGateway(['merchant_id' => '1', 'merchant_key' => 'k', 'merchant_salt' => 's']))->testMode(), 'default: live');
+        $this->enableShop();
+        $warnings = (new PaymentManager())->testModeWarnings();
+        $this->assertCount(2, $warnings, 'PayTR test mode + iyzico sandbox => admin warnings');
+        $this->assertContains('PayTR test modunda', $warnings[0]);
+        Settings::set('payment.paytr.test_mode', false);
+        Settings::set('payment.iyzico.sandbox', false);
+        $this->assertSame([], (new PaymentManager())->testModeWarnings());
+
+        $order = $this->placeOrder('paytr', new PaymentManager());
+        $oid = PaytrGateway::merchantOid($order['order_no']);
+        $total = (string) $order['total_kurus'];
+        $post = ['merchant_oid' => $oid, 'status' => 'success', 'total_amount' => $total, 'payment_amount' => $total,
+            'hash' => PaytrGateway::callbackHash($oid, 'success', $total, 'KEY123', 'SALT456')];
+        $test = $this->post('/odeme/paytr/bildirim', $post + ['test_mode' => '1'], false);
+        $this->assertSame('OK', $test->body(), 'acknowledged so PayTR stops retrying');
+        $row = (new OrderRepository())->find($order['id']);
+        $this->assertSame('basarisiz', $row['payment_status'], 'a test-card payment is not a payment in live mode');
+        $this->assertSame('yeni', $row['status']);
+        $this->assertSame('OK', $this->post('/odeme/paytr/bildirim', $post + ['test_mode' => '0'], false)->body());
+        $this->assertSame('odendi', (new OrderRepository())->find($order['id'])['payment_status'], 'live notification books the payment');
+    }
+
     public function testIyzicoAuthorizationHeaderAndPriceFormat(): void
     {
         $header = IyzicoGateway::authorization('apiKeyX', 'secretY', 'rnd-123', '/payment/iyzipos/checkoutform/auth/ecom/detail', '{"locale":"tr","token":"tok-1"}');
@@ -198,6 +223,14 @@ final class ShopTest extends TestCase
         $this->assertSame('paid', $applied['outcome']);
         $this->assertSame('iyzico:777', $applied['order']['payment_ref']);
         $this->assertSame('odendi', $applied['order']['payment_status']);
+
+        // Refunded afterwards: the buyer re-POSTs the old token, iyzico still answers SUCCESS for it.
+        Database::execute("UPDATE orders SET payment_status = 'iade', status = 'iptal' WHERE id = ?", [$order['id']]);
+        $applied = $manager->applyCallback($gateway, $gateway->handleCallback(Request::create('POST', '/odeme/iyzico/donus', ['token' => 'tok9-0001-abcd'])), new OrderRepository());
+        $this->assertSame('duplicate', $applied['outcome']);
+        $this->assertSame('iade', (new OrderRepository())->find($order['id'])['payment_status'], 'a replay never revives a refunded order');
+        $this->assertFalse((new OrderRepository())->markPaid($order['id'], 'x', null), 'markPaid() only from bekliyor/basarisiz');
+        $this->assertTrue((new OrderRepository())->markPaid($order['id'], 'manual:admin', null, ['bekliyor', 'basarisiz', 'iade']), 'admin override');
     }
 
     public function testShopierSignaturesAndCallback(): void
@@ -222,13 +255,43 @@ final class ShopTest extends TestCase
         $bad = $this->post('/odeme/shopier/donus', ['platform_order_id' => $order['order_no'], 'status' => 'success', 'random_nr' => '1', 'signature' => 'nope'], false);
         $this->assertSame(400, $bad->status(), 'unverified callback never redirects to the private order URL');
         $this->assertSame('bekliyor', (new OrderRepository())->find($order['id'])['payment_status']);
-        $ok = $this->post('/odeme/shopier/donus', [
-            'platform_order_id' => $order['order_no'], 'status' => 'success', 'payment_id' => '998', 'installment' => '0', 'random_nr' => '654321',
-            'signature' => ShopierGateway::callbackSignature('654321', $order['order_no'], 'shop-secret'),
-        ], false);
+        // The return signature covers random_nr . platform_order_id only, so a declined card's signed fields can be
+        // re-sent with status=success: a failed return counts once, and "success" never marks the order paid.
+        $signed = ['platform_order_id' => $order['order_no'], 'payment_id' => '998', 'installment' => '0', 'random_nr' => '654321',
+            'signature' => ShopierGateway::callbackSignature('654321', $order['order_no'], 'shop-secret')];
+        $failed = $this->post('/odeme/shopier/donus', $signed + ['status' => 'failed'], false);
+        $this->assertSame(303, $failed->status());
+        $this->assertSame(url('/odeme/sonuc/' . $order['access_key']), $failed->header('Location'));
+        $this->assertSame('basarisiz', (new OrderRepository())->find($order['id'])['payment_status']);
+        $flipped = $this->post('/odeme/shopier/donus', $signed + ['status' => 'success'], false);
+        $this->assertSame(303, $flipped->status());
+        $row = (new OrderRepository())->find($order['id']);
+        $this->assertSame('basarisiz', $row['payment_status'], 'replayed return with an edited status is ignored');
+        $this->assertSame('failed', $row['payload']['status']);
+
+        $mails = [];
+        \App\Services\Shop\OrderNotifier::$sender = static function (string $to, string $subject, string $body) use (&$mails): bool {
+            $mails[] = $body;
+            return true;
+        };
+        Settings::set('shop.notify_email', 'owner@example.com');
+        try {
+            $ok = $this->post('/odeme/shopier/donus', ['platform_order_id' => $order['order_no'], 'status' => 'success', 'payment_id' => '999', 'random_nr' => '777888',
+                'signature' => ShopierGateway::callbackSignature('777888', $order['order_no'], 'shop-secret')], false);
+        } finally {
+            \App\Services\Shop\OrderNotifier::$sender = null;
+        }
         $this->assertSame(303, $ok->status());
-        $this->assertSame(url('/odeme/sonuc/' . $order['access_key']), $ok->header('Location'));
-        $this->assertSame('odendi', (new OrderRepository())->find($order['id'])['payment_status']);
+        $row = (new OrderRepository())->find($order['id']);
+        $this->assertSame('bekliyor', $row['payment_status'], 'a Shopier "success" return waits for manual confirmation');
+        $this->assertSame('yeni', $row['status']);
+        $this->assertNull($row['paid_at']);
+        $this->assertTrue($row['payload']['review'] ?? false, 'flagged for review');
+        $this->assertCount(1, $mails, 'owner asked to verify the payment');
+        $this->assertContains('999', $mails[0]);
+        $result = $this->get('/odeme/sonuc/' . $order['access_key']);
+        $this->assertContains('Ödeme bildiriminiz bize ulaştı', $result->body());
+        $this->assertNotContains('http-equiv="refresh"', $result->body(), 'no auto-refresh while waiting for the owner');
     }
 
     // ------------------------------------------------------------------ orders
@@ -305,6 +368,38 @@ final class ShopTest extends TestCase
         $this->assertSame(0, (int) Database::fetchValue('SELECT stock FROM products WHERE id = ?', [$product['id']]));
     }
 
+    public function testUnpaidOrdersReleaseLimitedStock(): void
+    {
+        $this->enableShop();
+        $service = new OrderService();
+        $product = $this->product();
+        Database::execute('UPDATE products SET stock = 10 WHERE id = ?', [$product['id']]);
+        $havale = $service->place($this->product(), $this->form(['quantity' => '5']), '10.0.0.6')['order'];
+        $card = $service->place($this->product(), $this->form(['quantity' => '5', 'payment_method' => 'paytr']), '10.0.0.6')['order'];
+        $this->assertSame(409, $service->place($this->product(), $this->form(['quantity' => '1']), '10.0.0.7')['status'], 'sold out by unpaid orders');
+        $this->assertSame(0, $service->expireUnpaid(), 'fresh orders keep their stock');
+
+        Database::execute('UPDATE orders SET created_at = ? WHERE id IN (?, ?)', [Date::ago(3 * 3600), $havale['id'], $card['id']]);
+        $this->assertSame(1, $service->expireUnpaid(), 'card order expires after 2 h, havale waits 72 h');
+        $this->assertSame('iptal', (new OrderRepository())->find($card['id'])['status']);
+        $this->assertSame('yeni', (new OrderRepository())->find($havale['id'])['status']);
+        $this->assertSame(5, (int) Database::fetchValue('SELECT stock FROM products WHERE id = ?', [$product['id']]));
+
+        // A Shopier "success" waiting for the owner's check and paid orders are never cancelled.
+        $shopier = $service->place($this->product(), $this->form(['quantity' => '5', 'payment_method' => 'shopier']), '10.0.0.8')['order'];
+        Database::execute('UPDATE orders SET created_at = ?, payment_payload = ? WHERE id = ?', [Date::ago(100 * 3600), '{"gateway":"shopier","review":true}', $shopier['id']]);
+        Database::execute("UPDATE orders SET created_at = ?, payment_status = 'odendi' WHERE id = ?", [Date::ago(100 * 3600), $havale['id']]);
+        $this->assertSame(0, $service->expireUnpaid());
+
+        // Without cron: a stock shortage first releases stale unpaid orders.
+        Database::execute("UPDATE orders SET payment_status = 'bekliyor' WHERE id = ?", [$havale['id']]);
+        $this->assertSame(201, $service->place($this->product(), $this->form(['quantity' => '5']), '10.0.0.9')['status']);
+        $this->assertSame('iptal', (new OrderRepository())->find($havale['id'])['status']);
+        $this->assertSame('yeni', (new OrderRepository())->find($shopier['id'])['status']);
+        $this->assertSame(0, (int) Database::fetchValue('SELECT stock FROM products WHERE id = ?', [$product['id']]));
+        $this->assertTrue(isset(\App\Cron\Scheduler::tasks()['shop-expire']), 'cron task registered');
+    }
+
     // ------------------------------------------------------------------ HTTP: closed vs open ordering
 
     public function testClosedOrderingShowsNoticeAndRejectsPost(): void
@@ -319,6 +414,18 @@ final class ShopTest extends TestCase
         $this->assertContains('https://schema.org/OutOfStock', $html);
         $this->assertContains('"@type":"Product"', $html);
         $this->assertContains('"priceCurrency":"TRY"', $html);
+        // Unlicensed fan jersey: the brand is the shop, never the club; Product.image has no promo card.
+        $this->assertContains('"brand":{"@type":"Brand","name":"CR7.com.tr"}', $html);
+        $this->assertNotContains('"name":"Real Madrid"}', $html);
+        $this->assertContains('<meta property="product:brand" content="CR7.com.tr">', $html);
+        $this->assertContains('resmi lisanslı ürünü değil', $html);
+        preg_match('#"image":\[([^\]]*)\]#', $html, $m);
+        $this->assertTrue(isset($m[1]) && str_contains($m[1], '/assets/img/kits/real-madrid-2013-14-retro-formasi.svg') && !str_contains($m[1], '/og/'), 'Product.image: ' . ($m[1] ?? ''));
+        $this->assertContains('"shippingDetails":{"@type":"OfferShippingDetails"', $html);
+        $this->assertContains('"priceValidUntil":"' . gmdate('Y-m-d', strtotime('+1 year')) . '"', $html);
+        if (str_contains($html, '<meta property="og:image" content="' . url('/og/forma-'))) {
+            $this->assertContains('<meta property="og:image:width" content="1200">', $html);
+        }
         $this->assertContains('<link rel="canonical" href="' . url('/forma/real-madrid-2013-14-retro-formasi') . '">', $html);
         $this->assertSame(1, substr_count($html, '<h1'));
         try {
@@ -333,6 +440,7 @@ final class ShopTest extends TestCase
         Settings::set('shop.orders_enabled', true);
         $this->assertFalse(Shop::ordersOpen());
         $this->assertNotContains('id="order-form"', $this->get('/forma/real-madrid-2013-14-retro-formasi')->body());
+        $this->assertContains('Yakında satışta', $this->get('/')->body(), 'home teaser follows Shop::ordersOpen(), not the raw switch');
     }
 
     public function testOpenOrderingRendersFormAndPlacesHavaleOrder(): void
@@ -350,6 +458,10 @@ final class ShopTest extends TestCase
         $this->assertSame(422, $invalid->status());
         $this->assertContains('Geçerli bir e-posta adresi girin.', $invalid->body());
         $this->assertContains('value="Ahmet Yılmaz"', $invalid->body(), 'old input kept');
+        $this->assertContains('id="order-errors" role="alert" tabindex="-1"', $invalid->body(), 'focusable error summary');
+        $this->assertContains('<a href="#email">Geçerli bir e-posta adresi girin.</a>', $invalid->body(), 'summary links to the field');
+        $this->assertContains('id="email"', $invalid->body());
+        $this->assertNotContains('id="order-errors"', $html, 'no summary before a submit');
 
         $response = $this->post('/forma/real-madrid-2013-14-retro-formasi/siparis', $this->form(['payment_method' => 'havale']));
         $this->assertSame(303, $response->status());
@@ -363,6 +475,13 @@ final class ShopTest extends TestCase
         $this->assertSame(200, $this->get('/siparis/' . $order['access_key'])->status());
         $this->assertSame(404, $this->get('/siparis/' . str_repeat('0', 32))->status());
         $this->assertSame(200, $this->get('/odeme/sonuc/' . $order['access_key'])->status());
+
+        // GA4 would collect the full URL, i.e. the key to the buyer's name, phone and address.
+        Settings::set('analytics.ga4_id', 'G-TEST12345');
+        $this->assertContains('data-ga4="G-TEST12345"', $this->get('/forma/real-madrid-2013-14-retro-formasi')->body());
+        foreach (['/siparis/', '/odeme/', '/odeme/sonuc/'] as $prefix) {
+            $this->assertNotContains('data-ga4=', $this->get($prefix . $order['access_key'])->body(), $prefix . ' loads no analytics');
+        }
     }
 
     public function testShopListingFilterLegalPagesAndDisabledShop(): void
@@ -372,17 +491,25 @@ final class ShopTest extends TestCase
         $this->assertSame(200, $list->status());
         $this->assertContains('"@type":"ItemList"', $list->body());
         $this->assertSame(11, substr_count($list->body(), 'class="card product-card"'));
+        $this->assertSame(0, preg_match('#<img src="[^"]*/kits/[^"]*" alt=""#', $list->body()), 'product images have alt text');
+        $this->assertContains('alt="Real Madrid 2013–14 Retro Ronaldo Forması (La Décima)"', $list->body());
+        $this->assertSame('Juventus 2018–19 İç Saha Ronaldo Forması', Shop::seoTitle('Juventus 2018–19 İç Saha Forması'));
+        $this->assertSame('CR7 Antrenman Tişörtü', Shop::seoTitle('CR7 Antrenman Tişörtü'));
+        $this->assertSame('Atkı – Cristiano Ronaldo', Shop::seoTitle('Atkı'));
+        $this->assertContains('<title>Real Madrid 2013–14 Retro Ronaldo Forması (La Décima) | CR7.com.tr</title>', $this->get('/forma/real-madrid-2013-14-retro-formasi')->body());
         $filtered = $this->get('/forma-magazasi?takim=985');
         $this->assertSame(3, substr_count($filtered->body(), 'class="card product-card"'), 'three United kits');
         $this->assertContains('Manchester United Ronaldo Formaları', $filtered->body());
         $this->assertSame(404, $this->get('/forma-magazasi?takim=1')->status());
         foreach (['/mesafeli-satis-sozlesmesi', '/on-bilgilendirme-formu', '/iptal-ve-iade'] as $path) {
             $this->assertSame(200, $this->get($path)->status(), $path);
+            $this->assertContains('href="' . url($path) . '"', $list->body(), 'footer links the legal page ' . $path);
         }
         Settings::set('shop.company_name', 'Örnek Ticaret Ltd. Şti.');
         $this->assertContains('Örnek Ticaret Ltd. Şti.', $this->get('/mesafeli-satis-sozlesmesi')->body());
         Settings::set('shop.enabled', false);
         $this->assertSame(404, $this->get('/forma-magazasi')->status());
+        $this->assertNotContains('/mesafeli-satis-sozlesmesi', $this->get('/hakkinda')->body(), 'no legal links in the footer while the shop is off');
         $this->assertSame(404, $this->get('/forma/real-madrid-2013-14-retro-formasi')->status());
     }
 
@@ -480,6 +607,14 @@ final class ShopTest extends TestCase
         $this->assertSame('KEY123', Settings::get('payment.paytr.merchant_key'));
         $this->assertTrue(Shop::ordersOpen());
         $this->assertSame(4990, Shop::shippingFeeKurus());
+        $this->assertSame('905321234567', Settings::get('shop.whatsapp'), 'stored with the country code');
+        // One normaliser: a local 10-digit number links to the same wa.me number in the shop and on /iletisim.
+        foreach (['532 123 45 67', '0532 123 45 67', '+90 532 123 45 67', '0090 532 123 45 67'] as $number) {
+            $this->assertSame('905321234567', Shop::normalizeWhatsapp($number), $number);
+        }
+        Settings::set('shop.whatsapp', '5321234567'); // saved before the fix
+        $this->assertSame('https://wa.me/905321234567?text=x', Shop::whatsappLink('x'));
+        $this->assertSame('https://wa.me/905321234567', \App\Controllers\PageController::whatsapp('5321234567')['url']);
         unset($form['paytr_merchant_key'], $form['paytr_merchant_salt']);
         $this->post('/admin/odeme-ayarlari', $form);
         Settings::flush();
@@ -505,6 +640,25 @@ final class ShopTest extends TestCase
         $fresh = (new OrderRepository())->find($order['id']);
         $this->assertSame(['kargoda', 'YK 12345'], [$fresh['status'], $fresh['cargo_tracking']]);
         $this->assertSame(3, (int) Database::fetchValue('SELECT stock FROM products WHERE id = ?', [$product['id']]), 'un-cancel takes stock again');
+
+        // Un-cancelling is refused once the units were sold to someone else (no negative stock).
+        $this->post('/admin/siparisler/' . $order['id'] . '/durum', ['_action' => 'status', 'status' => 'iptal']);
+        Database::execute('UPDATE products SET stock = 1 WHERE id = ?', [$product['id']]);
+        $this->post('/admin/siparisler/' . $order['id'] . '/durum', ['_action' => 'status', 'status' => 'yeni']);
+        $this->assertSame('iptal', (new OrderRepository())->find($order['id'])['status'], 'stays cancelled');
+        $this->assertSame(1, (int) Database::fetchValue('SELECT stock FROM products WHERE id = ?', [$product['id']]));
+        // Array inputs are read as '' (no "Array to string" error, no literal "Array" stored).
+        foreach ([['_action' => ['x'], 'status' => 'iptal'], ['_action' => 'status', 'status' => 'iptal', 'cargo_tracking' => ['x']], ['_action' => 'payment', 'payment_status' => ['x']], ['_action' => 'mark_paid', 'payment_note' => ['x']]] as $fuzz) {
+            $this->assertSame(302, $this->post('/admin/siparisler/' . $order['id'] . '/durum', $fuzz)->status());
+        }
+        $this->assertNull((new OrderRepository())->find($order['id'])['cargo_tracking']);
+
+        // A sold-out limited product shows "Tükendi" instead of the order form.
+        Database::execute('UPDATE products SET stock = 0 WHERE id = ?', [$product['id']]);
+        $html = $this->get('/forma/' . $product['slug'])->body();
+        $this->assertNotContains('id="order-form"', $html);
+        $this->assertContains('Tükendi', $html);
+        $this->assertContains('https://schema.org/OutOfStock', $html);
         $this->assertSame(200, $this->get('/admin/urunler')->status());
         $this->assertSame(200, $this->get('/admin/siparisler')->status());
     }

@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Tests;
 
+use App\Controllers\StatsController;
 use App\Core\App;
 use App\Core\Database;
 use App\Core\Request;
@@ -13,6 +14,7 @@ use App\Repositories\StatsRepository;
 use App\Services\Transfermarkt\TransfermarktClient;
 use App\Services\Transfermarkt\TransfermarktMapper;
 use App\Services\Transfermarkt\TransfermarktSync;
+use App\Support\Format;
 use App\Support\Svg;
 
 /**
@@ -371,8 +373,24 @@ final class StatsTest extends TestCase
         $this->assertSame(200, $season->status());
         $this->assertContains('content="index,follow', $season->body(), 'season pages are indexable');
         $this->assertContains('maclar?sezon=2008"', $season->body(), 'canonical keeps the season filter');
-        $filtered = $this->get('/istatistikler/maclar?turnuva=GB1');
+        // Main competitions are indexable keyword pages with their own H1/description (SEO-10);
+        // result filters and minor competitions stay noindex.
+        $league = $this->get('/istatistikler/maclar?turnuva=GB1')->body();
+        $this->assertContains('content="index,follow', $league);
+        $this->assertContains('<title>Cristiano Ronaldo Premier League Maçları | CR7.com.tr</title>', $league);
+        $this->assertSame(1, preg_match('#<h1[^>]*>Cristiano Ronaldo Premier League Maçları</h1>#u', $league), 'H1 names the competition');
+        $this->assertContains('content="Cristiano Ronaldo’nun Premier League maçları: ', $league);
+        $this->assertNotContains('kariyeri boyunca', $league, 'competition totals are not presented as career totals');
+        $filtered = $this->get('/istatistikler/maclar?turnuva=GB1&sonuc=galibiyet');
         $this->assertContains('noindex,follow', $filtered->body());
+        $this->assertSame(['Cristiano Ronaldo Hazırlık Maçları', 'Cristiano Ronaldo Hazırlık Maçları'], StatsController::matchesHeading(null, 'Hazırlık Maçları'), 'no doubled "Maçları"');
+        [$h1, $title] = StatsController::matchesHeading('2023/24', 'AFC Şampiyonlar Ligi Elemeleri', 2);
+        $this->assertSame('Cristiano Ronaldo 2023/24 AFC Şampiyonlar Ligi Elemeleri Maçları – Sayfa 2', $h1);
+        $this->assertTrue(mb_strlen($title) <= 60 && str_ends_with($title, ' – Sayfa 2') && str_contains($title, 'Ronaldo'), $title);
+        $this->assertNotContains('Cristiano Ronaldo’nun Maçları', StatsController::matchesHeading(null, 'Dünya Kupası Elemeleri Avrupa')[1], 'no shared fallback title');
+        $this->assertContains('Sayfa 2: ', StatsController::matchesDescription('2024/25', null, ['appearances' => 55, 'goals' => 48, 'assists' => 5], 2));
+        $this->assertSame('Konfederasyonlar Kupası', StatsRepository::competitionName('CONC', 'Confederations Cup'));
+        $this->assertSame('LaLiga', StatsRepository::competitionName('ES1', 'LaLiga'));
         $redirect = $this->get('/istatistikler/maclar?sezon=&turnuva=gb1');
         $this->assertSame(301, $redirect->status());
         $this->assertContains('/istatistikler/maclar?turnuva=GB1', (string) $redirect->header('Location'));
@@ -390,7 +408,23 @@ final class StatsTest extends TestCase
             $response = $this->get($path);
             $this->assertSame(200, $response->status(), $path);
             $this->assertSame(1, substr_count($response->body(), '<h1'), $path);
+            // No zero tiles / "0 Maç" cards that read like real numbers: one empty state instead.
+            $this->assertContains('class="empty-state stats-empty"', $response->body(), $path);
+            $this->assertNotContains('<span class="stat-value">0</span>', $response->body(), $path);
+            $this->assertNotContains('<strong>0</strong>Maç', $response->body(), $path);
+            $this->assertNotContains('hat-trick kaydı bulunmuyor', $response->body(), $path);
         }
+        // The statistics page is only a notice now: no "0 maçta 0 gol" description, kept out of the index.
+        $stats = $this->get('/istatistikler')->body();
+        $this->assertContains('<meta name="robots" content="noindex,follow">', $stats);
+        $this->assertNotContains('0 maçta 0 gol', $stats);
+    }
+
+    public function testPercentagesUseTurkishStyle(): void
+    {
+        $this->assertSame('%72,1', Format::percent(72.14, 1));
+        $this->assertSame('%84', Format::percent(83.6));
+        $this->assertSame('-', Format::percent(null));
     }
 
     // ------------------------------------------------------------------ helpers

@@ -15,6 +15,7 @@ use App\Repositories\NewsRepository;
 use App\Services\News\ArticleComposer;
 use App\Services\News\ArticleExtractor;
 use App\Services\News\Clusterer;
+use App\Services\News\CopyCheck;
 use App\Services\News\FeedParser;
 use App\Services\News\Fetchers\BingFetcher;
 use App\Services\News\Fetchers\GoogleFetcher;
@@ -22,12 +23,14 @@ use App\Services\News\Fetchers\RssFetcher;
 use App\Services\News\IndexNow;
 use App\Services\News\NewsCollector;
 use App\Services\News\NewsPublisher;
+use App\Services\News\PostMeta;
 use App\Services\News\RelevanceFilter;
 use App\Services\News\SourceRegistry;
 use App\Services\News\Spinner;
 use App\Services\News\Tagger;
 use App\Support\Cache;
 use App\Support\Date;
+use App\Support\Http;
 use App\Support\OgImage;
 use App\Support\Str;
 
@@ -120,6 +123,38 @@ final class NewsTest extends TestCase
         $this->assertSame("Cristiano Ronaldo'nun uyku sırrı ortaya çıktı: Günde 5 kez uyku", $items[0]['title']);
         $this->assertTrue(str_ends_with($items[0]['description'], 'uyku düzenini…'), 'cut word dropped: ' . $items[0]['description']);
         $this->assertSame('https://example.test/a', BingFetcher::decodeLink('https://example.test/a'));
+        $evil = 'https://news.evilbing.com/x?url=http%3a%2f%2f169.254.169.254%2f';
+        $this->assertSame($evil, BingFetcher::decodeLink($evil), 'only bing.com and its subdomains are decoded');
+    }
+
+    public function testThirdPartyUrlsAreFetchedFromPublicHostsOnly(): void
+    {
+        foreach ([
+            'http://127.0.0.1/hakkinda', 'http://localhost/', 'http://169.254.169.254/latest/meta-data/', 'http://10.0.0.5/',
+            'http://100.64.1.1/', 'http://[::1]/', 'http://[fd00::1]/', 'http://[::ffff:127.0.0.1]/', 'http://2130706433/',
+            'http://evil.example\\@127.0.0.1/', 'https://www.example.com:8443/', 'ftp://example.com/', 'http://user@example.com/',
+        ] as $url) {
+            [$blocked] = Http::publicTarget($url);
+            $this->assertTrue($blocked !== null, $url . ' must be blocked');
+        }
+        $response = Http::getPublic('http://127.0.0.1/hakkinda');
+        $this->assertSame(0, $response['status']);
+        $this->assertContains('Blocked URL', (string) $response['error']);
+        $this->assertSame([null, []], Http::publicTarget('https://93.184.215.14/haber?id=1'), 'public literal IP');
+        $this->assertTrue(Http::isPublicIp('2606:4700::6810:84e5'));
+        $this->assertFalse(Http::isPublicIp('224.0.0.1'));
+    }
+
+    public function testSourceBoxReadsRealHrefsAndOnlyWebLinks(): void
+    {
+        $body = \App\Support\Html::sanitize('<p>Gövde.</p><p><strong>Kaynak:</strong> <a title=\'href="javascript:alert(document.domain)"\' href="https://www.example.com/">Örnek &amp; Kaynak</a>, '
+            . '<a href="https://www.ornek.test/b">B</a></p>');
+        $this->assertSame([
+            ['url' => 'https://www.example.com/', 'name' => 'Örnek & Kaynak'],
+            ['url' => 'https://www.ornek.test/b', 'name' => 'B'],
+        ], NewsController::sources(['body' => $body]));
+        $this->assertSame([], NewsController::sources(['body' => '<p><strong>Kaynak:</strong> <a href="javascript:alert(1)">x</a></p>', 'source_url' => 'javascript:alert(2)']));
+        $this->assertSame([['url' => 'https://a.test/x', 'name' => 'a.test']], NewsController::sources(['body' => '<p>-</p>', 'source_url' => 'https://a.test/x', 'source_name' => '']));
     }
 
     public function testGoogleTitlesAndStoryClusterAreParsed(): void
@@ -161,6 +196,95 @@ final class NewsTest extends TestCase
         $this->assertSame(0, RelevanceFilter::score('Ronaldo Nazário Cruzeiro hisselerini sattı'));
         $this->assertSame(0, RelevanceFilter::score('Ronaldinho Türkiye’ye geliyor'));
         $this->assertSame(2, RelevanceFilter::score('Messi, Cristiano Ronaldo ve Ronaldo Nazário aynı listede'), 'Cristiano present');
+        // Words between "Brezilyalı" and "Ronaldo"; federation / club markers of Nazário.
+        $this->assertSame(0, RelevanceFilter::score('Brezilyalı efsane Ronaldo, Cruzeiro hisselerini sattı'));
+        $this->assertSame(0, RelevanceFilter::score("Efsane golcü Ronaldo Real Valladolid'i sattı", 'Brezilyalı yıldız kulübü sattı.'));
+        $this->assertSame(0, RelevanceFilter::score('Ronaldo seçim kararını verdi', '1994 ve 2002 şampiyonu Ronaldo, CBF seçimlerinde aday.'));
+        $this->assertSame(2, RelevanceFilter::score('Ronaldo, Brezilyalı Neymar ile Al Hilal maçında karşılaştı'), 'a list is not "Brezilyalı Ronaldo"');
+        // Publish-time check of the whole story text.
+        $this->assertTrue(RelevanceFilter::aboutCristiano("Ronaldo yine attı\nAl-Nassr'ın Portekizli yıldızı Ronaldo iki gol attı."));
+        $this->assertTrue(RelevanceFilter::aboutCristiano('Christiano Ronaldo milli takım kampını neden terk ettiğini açıkladı'));
+        $this->assertFalse(RelevanceFilter::aboutCristiano("Ronaldo seçim kararını verdi\nBrezilya'nın efsane golcüsü Ronaldo, federasyon başkanlığına aday oldu."));
+        $this->assertFalse(RelevanceFilter::aboutCristiano('Portekiz kazandı, Messi gol attı'), 'must mention him');
+    }
+
+    public function testPublisherRejectsAnotherRonaldosStory(): void
+    {
+        Config::set('spinner.min_words', 50); // compose succeeds; only the publish-time check stops it
+        $url = 'https://www.aspor.com.tr/futbol/ronaldo-cbf-adayligi';
+        $text = implode("\n\n", [
+            "Brezilya'nın efsane golcüsü Ronaldo, federasyon başkanlığı için adaylığını resmen açıkladı. 1994 ve 2002 Dünya Kupası'nı kazanan eski futbolcu, uzun süredir yönetimden memnun olmadığını dile getiriyordu.",
+            'Ronaldo, düzenlediği basın toplantısında ülke futbolunun yeniden ayağa kalkması gerektiğini söyledi. Eski forvet, altyapı yatırımlarını ve kulüplerin mali yapısını önceliği olarak gösterdi.',
+            'Seçimin önümüzdeki yıl mart ayında yapılması bekleniyor. Ronaldo, kampanyası boyunca eyalet federasyonlarıyla tek tek görüşeceğini ve yeni bir dönem başlatmak istediğini vurguladı.',
+            "Ronaldo'nun programında kadın futbolu, hakem eğitimi ve stadyum güvenliği gibi başlıklar da yer alıyor. Eski golcü, yayın gelirlerinin daha adil paylaştırılması gerektiğini savundu.",
+            'Basın toplantısına katılan eski takım arkadaşları da Ronaldo’ya destek verdi. Cafu ve Roberto Carlos, efsane forvetin futbol bilgisi ve uluslararası tecrübesiyle yeni bir vizyon getireceğini belirtti.',
+            "Uzmanlar, eski yıldızın kamuoyundaki popülerliğinin oy kullanacak eyalet federasyonları üzerinde de etkili olabileceğini ifade ediyor. Seçim takvimi önümüzdeki haftalarda netleşecek.",
+        ]);
+        $hash = Clusterer::urlHash($url);
+        $this->cacheKeys[] = 'news:feedtext:' . $hash;
+        Cache::set('news:feedtext:' . $hash, $text, 600);
+        $id = Database::insert('news_items', [
+            'source' => 'aspor', 'source_name' => 'A Spor', 'url' => $url, 'url_hash' => $hash,
+            'title' => 'Ronaldo seçim kararını verdi: Federasyon başkanlığına aday', 'title_norm' => Str::normalize('Ronaldo seçim kararını verdi'),
+            'description' => 'Efsane golcü Ronaldo, seçimlerde aday olacağını açıkladı.', 'published_at' => Date::now(), 'fetched_at' => Date::now(), 'status' => 'pending',
+        ]);
+        $publisher = new NewsPublisher();
+        $this->assertNull($publisher->publishItem($id, true), 'not published: ' . $publisher->lastMessage());
+        $this->assertSame(0, (int) Database::fetchValue('SELECT COUNT(*) FROM posts'));
+        $this->assertSame(['failed', 'off-topic'], array_values(Database::fetchOne('SELECT status, note FROM news_items WHERE id = ?', [$id])));
+    }
+
+    public function testNoTextRetriesCountRealFetchesOnly(): void
+    {
+        $url = 'https://kaynak-kapali.test/ronaldo-rekor';
+        $key = 'news:article:' . sha1($url);
+        $this->cacheKeys[] = $key;
+        $id = Database::insert('news_items', [
+            'source' => 'sozcu', 'source_name' => 'X', 'url' => $url, 'url_hash' => Clusterer::urlHash($url),
+            'title' => 'Cristiano Ronaldo yeni rekor kırdı', 'title_norm' => 'cristiano ronaldo yeni rekor kirdi', 'published_at' => Date::now(), 'fetched_at' => Date::now(),
+            'status' => 'pending', 'attempts' => 1, 'note' => 'no-text',
+        ]);
+        $publisher = new NewsPublisher();
+        Cache::set($key, ['paragraphs' => [], 'words' => 0, 'title' => null, 'method' => 'none'], 600); // the last fetch failed
+        $this->assertTrue(ArticleExtractor::failedRecently($url));
+        $this->assertFalse(in_array($id, array_map('intval', array_column($publisher->candidates(), 'id')), true), 'no attempt is used up while the failure is cached');
+        Cache::forget($key);
+        $this->assertTrue(in_array($id, array_map('intval', array_column($publisher->candidates(), 'id')), true), 'retried once it expired');
+        // An admin "Şimdi yayınla" fetches again instead of answering from the failure cache.
+        Cache::set($key, ['paragraphs' => [], 'words' => 0, 'title' => null, 'method' => 'none'], 600);
+        ArticleExtractor::forgetFailure($url);
+        $this->assertFalse(ArticleExtractor::failedRecently($url));
+    }
+
+    public function testPublishingAMemberOfALiveStoryCreatesNoDuplicate(): void
+    {
+        Config::set('spinner.min_words', 150);
+        [$a, $b] = $this->seedStory();
+        $publisher = new NewsPublisher();
+        $postId = $publisher->publishItem($a, true);
+        $this->assertTrue($postId !== null, 'published: ' . $publisher->lastMessage());
+        Database::update('news_items', ['status' => 'duplicate', 'note' => 'cluster:' . $a], 'id = ?', [$b]);
+        $this->assertSame($postId, $publisher->storyPost(Database::fetchOne('SELECT * FROM news_items WHERE id = ?', [$b])));
+        $this->assertSame($postId, $publisher->publishItem($b, true), '"Şimdi yayınla" on the other outlet');
+        $this->assertContains('zaten yayında', $publisher->lastMessage());
+        $this->assertSame(1, (int) Database::fetchValue('SELECT COUNT(*) FROM posts'), 'no second post');
+        $this->assertSame('cluster:' . $a, Database::fetchValue('SELECT note FROM news_items WHERE id = ?', [$b]), 'cluster stays with the live post');
+    }
+
+    public function testScheduledSpunPostDoesNotBlockTheGate(): void
+    {
+        Settings::set('news.publish_window', [0, 24]);
+        Settings::set('news.min_interval_minutes', 60);
+        Settings::flush();
+        $this->insertPost('Otomatik haber iki saat önce', ['news_item_id' => 1, 'published_at' => Date::ago(7200)]);
+        $tomorrow = gmdate('Y-m-d H:i:s', time() + 15 * 3600);
+        $this->insertPost('Yarına planlanmış otomatik haber', ['news_item_id' => 2, 'published_at' => $tomorrow]);
+        $this->insertPost('Taslağa alınmış otomatik haber', ['news_item_id' => 3, 'status' => 'draft', 'published_at' => Date::ago(60)]);
+        $repo = new \App\Repositories\NewsRepository();
+        $this->assertSame(Date::ago(7200), $repo->lastSpunAt(), 'only live posts');
+        $this->assertTrue((new NewsPublisher())->gate()['ok'], 'interval measured from the last live post');
+        [$from, $to] = NewsPublisher::dayBoundsUtc();
+        $this->assertSame(strcmp(Date::ago(7200), $from) >= 0 ? 1 : 0, $repo->countSpunBetween($from, $to), 'draft not counted');
     }
 
     public function testClustererMatchesSameStoryHeadlines(): void
@@ -180,6 +304,18 @@ final class NewsTest extends TestCase
             "Ronaldo'ya ceza Portekiz Futbol Federasyonu, milli takım kampını terk eden 41 yaşındaki Cristiano Ronaldo'ya 30 gün hak mahrumiyeti ve 255 avro para cezası verdi.",
             "Kampı terk eden yıldıza men Portekiz Futbol Federasyonu, izinsiz milli takım kampını terk eden Cristiano Ronaldo'ya 30 gün hak mahrumiyeti ve 255 euro para cezası verdi."
         ));
+        // Different matches / milestones are different stories (scores and counts differ).
+        $this->assertFalse(Clusterer::sameStory("Al Nassr, Al Hilal'i 2-1 yendi: Ronaldo gol attı", "Al Nassr, Al Ittihad'ı 3-0 yendi: Ronaldo gol attı"));
+        $this->assertFalse(Clusterer::sameStory('Portekiz, İrlanda’yı 2-0 yendi: Ronaldo iki gol attı', "Portekiz, Macaristan'ı 3-1 yendi: Ronaldo iki gol attı"));
+        $this->assertFalse(Clusterer::sameStory('Cristiano Ronaldo Al Nassr formasıyla 950. golünü attı', 'Cristiano Ronaldo Al Nassr formasıyla 951. golünü attı'));
+        $this->assertTrue(Clusterer::sameStory("Al Nassr, Al Hilal'i 2-1 yendi: Ronaldo gol attı", "Al Hilal, Al Nassr'a 1-2 yenildi: Ronaldo gol attı"), 'same score told from the other side');
+        $this->assertTrue(Clusterer::sameStory("Kampı terk eden Ronaldo'ya 30 gün men cezası", "Kampı terk eden Ronaldo'ya 255 euro para cezası"), 'numbers of different things');
+        $this->assertTrue(Clusterer::sameStory('Ronaldo 1.000. golüne yaklaştı', 'Ronaldo 1000. golüne yaklaştı'));
+        // Items days apart need nearly identical titles.
+        $candidates = [['id' => 7, 'titles' => ["Ronaldo'nun golü Al Nassr'a yetmedi"], 'text' => '', 'published_at' => Date::ago(3 * 86400)]];
+        $this->assertSame([], Clusterer::matches(["Ronaldo'nun golü Al Nassr'a galibiyeti getirdi"], '', $candidates, null, Date::now()));
+        $this->assertSame(7, Clusterer::matches(["Ronaldo'nun golü Al Nassr'a galibiyeti getirdi"], '', $candidates, null, Date::ago(3 * 86400 - 3600))[0]['id'] ?? null);
+        $this->assertSame(7, Clusterer::matches(["Ronaldo'nun golü Al Nassr'a yetmedi!"], '', $candidates, null, Date::now())[0]['id'] ?? null, 'near-identical title');
         $this->assertSame(12, Clusterer::primaryFromNote('cluster:12'));
         $this->assertSame(12, Clusterer::primaryFromNote('cluster:12; low-uniqueness (31%)'));
         $this->assertNull(Clusterer::primaryFromNote('evidence-only'));
@@ -242,6 +378,23 @@ final class NewsTest extends TestCase
         }
         $this->assertNull(ArticleExtractor::cleanParagraph('Ronaldo ayrıldı mı, Ronaldo bıraktı mı, Portekiz son durum, Ronaldo haberleri, milli takım kampı, Jesus.'), 'keyword list dropped');
         $this->assertSame("Uluslar Ligi'nde 27 Eylül'deki Norveç maçında süre alamadı.", ArticleExtractor::cleanParagraph("NE OLMUŞTU? Uluslar Ligi'nde 27 Eylül'deki Norveç maçında süre alamadı."));
+
+        // Turkish pages declaring windows-1254 / ISO-8859-9 in a <meta> (with or without the header).
+        $body = '<article><p>Cristiano Ronaldo bugün sahadaydı; Şükrü, Ömer ve Gülşen tribünde onu izledi. '
+            . implode(' ', array_map(static fn (int $i): string => 'kelime' . $i, range(1, 60))) . '</p></article>';
+        foreach ([
+            '<meta charset="windows-1254">',
+            '<meta http-equiv="Content-Type" content="text/html; charset=iso-8859-9">',
+        ] as $meta) {
+            $html = mb_convert_encoding('<html><head>' . $meta . '<title>Başlık şöyle</title></head><body>' . $body . '</body></html>', 'Windows-1254', 'UTF-8');
+            foreach (['text/html; charset=windows-1254', null] as $contentType) {
+                $result = ArticleExtractor::fromHtml($html, $contentType);
+                $this->assertSame('Başlık şöyle', $result['title'] ?? null, $meta . ' / ' . var_export($contentType, true));
+                $this->assertContains('bugün sahadaydı; Şükrü, Ömer ve Gülşen', $result['paragraphs'][0] ?? '', $meta);
+            }
+        }
+        $lying = ArticleExtractor::fromHtml('<html><head><meta charset="windows-1254"><title>Başlık şöyle</title></head><body>' . $body . '</body></html>');
+        $this->assertSame('Başlık şöyle', $lying['title'] ?? null, 'UTF-8 bytes with a wrong charset declaration');
     }
 
     public function testTagger(): void
@@ -379,6 +532,14 @@ final class NewsTest extends TestCase
         Settings::set('news.publish_window', [($hour + 1) % 24, ($hour + 2) % 24]);
         Settings::flush();
         $this->assertContains('Yayın penceresi dışında', $publisher->gate()['reason']);
+        Settings::set('news.publish_window', [$hour, $hour]);
+        Settings::flush();
+        $this->assertTrue($publisher->gate()['ok'], 'equal window bounds = all day');
+        Config::set('spinner.enabled', false);
+        $this->assertContains('Otomatik yayın kapalı', $publisher->gate()['reason'], 'spinner.enabled=false stops automatic publishing');
+        Config::set('spinner.enabled', true);
+        Settings::set('news.publish_window', [($hour + 1) % 24, ($hour + 2) % 24]);
+        Settings::flush();
         // Forced publishing ignores the gate but still needs text: x.test/3 has none => no post.
         $this->assertNull($publisher->publishItem($other, true));
         $this->assertSame((int) $postId, $publisher->publishItem($a, true), 'already published item returns its post');
@@ -407,6 +568,55 @@ final class NewsTest extends TestCase
         $this->assertSame([], (new NewsRepository())->forSitemap(), 'noindex posts are not in the sitemap');
         $response = (new NewsController())->show(self::request('/haber/' . Database::fetchValue('SELECT slug FROM posts WHERE id = ?', [$postId])));
         $this->assertContains('<meta name="robots" content="noindex,follow">', $response->body());
+    }
+
+    public function testCopyCheckNoindexesNearVerbatimPosts(): void
+    {
+        $source = 'Medyada çıkan haberler, İtalyan Milan kulübünün mevcut sahibi Amerikan şirketi RedBird Capital’in Al Nassr kulübünün hisselerinin yüzde 70’ini almak istediğini ortaya koymuştu. Ronaldo ise sessiz kaldı.';
+        $copied = '<p>Basında yer alan haberler, İtalyan Milan kulübünün mevcut sahibi Amerikan şirketi "RedBird Capital"in Al Nassr kulübünün hisselerinin yüzde 70’ini almak istediğini gösterdi.</p>';
+        $report = CopyCheck::measure($copied, [$source]);
+        $this->assertFalse($report['ok'], 'long verbatim run fails: ' . json_encode($report, JSON_UNESCAPED_UNICODE));
+        $this->assertTrue($report['run'] >= 18, 'a short quoted name does not break the run: ' . $report['run']);
+        $this->assertTrue($report['shared'] > 0.5, 'shared 6-grams: ' . $report['shared']);
+        // Quotations (4+ words) stay verbatim by design and are not counted.
+        $quote = '<p>Ronaldo konuya ilişkin “Medyada çıkan haberler, İtalyan Milan kulübünün mevcut sahibi Amerikan şirketi” ifadesini kullandı.</p>';
+        $this->assertSame(0.0, CopyCheck::measure($quote, [$source])['shared']);
+        $this->assertTrue(CopyCheck::measure($quote, [$source])['ok']);
+        $this->assertTrue(CopyCheck::measure('<p>Portekizli yıldız dün akşam iki gol atarak takımını galibiyete taşıdı.</p>', [$source])['ok']);
+
+        // Publisher: a post failing the gate is published noindex, kept out of the sitemap, noted in the queue.
+        Config::set('spinner.min_words', 150);
+        Settings::set('spinner.max_verbatim_words', 1);
+        Settings::flush();
+        [$a] = $this->seedStory();
+        $publisher = new NewsPublisher();
+        $postId = $publisher->publishItem($a, true);
+        $this->assertTrue($postId !== null, $publisher->lastMessage());
+        $this->assertSame(0, (int) Database::fetchValue('SELECT is_indexable FROM posts WHERE id = ?', [$postId]));
+        $this->assertSame([], (new NewsRepository())->forSitemap());
+        $this->assertContains('noindex: kaynakla ortak', (string) Database::fetchValue('SELECT note FROM news_items WHERE id = ?', [$a]));
+        $this->assertContains('Noindex:', $publisher->lastMessage());
+    }
+
+    public function testPostMetaTitleAndDescriptionLengths(): void
+    {
+        $long = "Cristiano Ronaldo'ya 38 saniyede ödeyeceği ceza: 255 euro para ve 30 gün men cezası";
+        $this->assertSame("Cristiano Ronaldo'ya 38 saniyede ödeyeceği ceza", PostMeta::title(null, $long), 'clause before the colon');
+        $this->assertSame("Ten Hag'dan Ronaldo'ya sert sözler", PostMeta::title(null, "Spor gündemi: Ten Hag'dan Ronaldo'ya sert sözler"), 'filler frame dropped');
+        $this->assertSame('Kısa başlık', PostMeta::title('Kısa başlık', $long), 'meta_title wins');
+        $cut = PostMeta::title(null, 'Futbol gündemi: Cristiano Ronaldo’nun Al Nassr’ın sahibi olduğu iddiasının gerçeği nihayet ortaya çıktı');
+        $this->assertTrue(mb_strlen($cut) <= 60 && str_starts_with($cut, 'Cristiano Ronaldo'), $cut);
+        foreach (["Ronaldo'dan rekor", str_repeat('Ronaldo gol attı ', 8)] as $title) {
+            $this->assertTrue(mb_strlen(PostMeta::title(null, $title)) <= 60);
+        }
+
+        // Whole sentences (120–160) instead of a hard cut; the stored summary may end with '…'.
+        $body = '<p>Spor gündeminde bu kez Cristiano Ronaldo var.</p><p>Cristiano Ronaldo, Al-Nassr formasıyla çıktığı maçta iki gol attı ve takımını galibiyete taşıdı. '
+            . 'Portekizli yıldız gol sayısını 960’a çıkardı. Teknik direktör maç sonunda açıklama yaptı.</p><p><strong>Kaynak:</strong> <a href="https://x.test">X</a></p>';
+        $description = PostMeta::description('Cristiano Ronaldo, Al-Nassr formasıyla çıktığı maçta iki gol attı ve takımını…', $body);
+        $this->assertSame('Cristiano Ronaldo, Al-Nassr formasıyla çıktığı maçta iki gol attı ve takımını galibiyete taşıdı. Portekizli yıldız gol sayısını 960’a çıkardı.', $description);
+        $this->assertTrue(mb_strlen($description) >= 120 && mb_strlen($description) <= 160, (string) mb_strlen($description));
+        $this->assertTrue(mb_strlen(PostMeta::description(str_repeat('Ronaldo uzun bir cümle kurdu ', 10) . '.', '')) <= 160, 'one long sentence is cut at a word boundary');
     }
 
     // ------------------------------------------------------------------ repository / pages / feed
@@ -453,6 +663,16 @@ final class NewsTest extends TestCase
         $this->assertSame('Ronaldo Al-Nassr ile rekor kırdı', $repo->findBySlug('ronaldo-al-nassr-ile-rekor-kirdi')['title']);
         $this->assertSame([$second], array_column($repo->search('sözleşme Ronaldo'), 'id'));
         $this->assertSame([], $repo->search('x'));
+        // SQLite LIKE folds ASCII only: Turkish-cased variants make the search case-insensitive.
+        $turkish = $this->insertPost('ŞAMPİYONLAR LİGİ’NDE ÇILGIN GECE: Ronaldo İzmir’de');
+        foreach (['şampiyonlar', 'Şampiyonlar', 'ŞAMPİYONLAR', 'çılgın', 'izmir', 'İZMİR'] as $q) {
+            $this->assertSame([$turkish], array_column($repo->search($q), 'id'), 'Turkish case-insensitive search: ' . $q);
+        }
+        [$sql, $params] = Database::containsAny(['title'], 'şampiyon');
+        $this->assertSame("(title LIKE ? ESCAPE '\\' OR title LIKE ? ESCAPE '\\' OR title LIKE ? ESCAPE '\\')", $sql);
+        $this->assertSame(['%şampiyon%', '%ŞAMPİYON%', '%Şampiyon%'], $params);
+        $this->assertSame(['%50\\%%'], Database::containsAny(['title'], '50%')[1], 'ASCII terms: one escaped LIKE');
+        Database::execute('DELETE FROM posts WHERE id = ?', [$turkish]);
         $this->assertCount(2, $repo->forSitemap(), 'indexable only');
         $this->assertSame(['url', 'lastmod', 'image'], array_keys($repo->forSitemap()[0]));
         $this->assertSame(['url', 'title', 'published_at'], array_keys($repo->forNewsSitemap()[0]));
@@ -490,6 +710,10 @@ final class NewsTest extends TestCase
         $this->assertContains('<link rel="prev" href="' . url('/haberler') . '">', $page2);
         $this->assertSame(404, $controller->index(self::request('/haberler?sayfa=3'))->status());
         $this->assertSame(404, $controller->index(self::request('/haberler?sayfa=0'))->status());
+        $first = $controller->index(self::request('/haberler?sayfa=1'));
+        $this->assertSame(301, $first->status(), '?sayfa=1 is page 1: one URL');
+        $this->assertSame(url('/haberler'), $first->header('Location'));
+        $this->assertSame(url('/haberler/etiket/al-nassr'), $controller->tag(self::request('/haberler/etiket/al-nassr?sayfa=1', ['slug' => 'al-nassr']))->header('Location'));
 
         $slug = 'ronaldo-haber-1-basligi';
         $show = $controller->show(self::request('/haber/' . $slug));
@@ -521,6 +745,28 @@ final class NewsTest extends TestCase
         $this->assertFalse(NewsController::isBot('Mozilla/5.0 (iPhone; CPU iPhone OS 17_0) Safari/604.1'));
     }
 
+    public function testMissingImageFileFallsBackToPlaceholder(): void
+    {
+        $this->assertNull(NewsRepository::imageUrl(null));
+        $this->assertNull(NewsRepository::imageUrl(''));
+        $this->assertNull(NewsRepository::imageUrl('/og/haber-silinmis-gorsel-000000.png'), 'missing local file');
+        $this->assertSame(url('/assets/img/og-default.png'), NewsRepository::imageUrl('/assets/img/og-default.png'));
+        $this->assertSame('https://cdn.example.com/a.jpg', NewsRepository::imageUrl('https://cdn.example.com/a.jpg'), 'remote URLs are kept');
+
+        $this->insertPost('Ronaldo görseli kayıp haber', ['image_path' => '/og/haber-silinmis-gorsel-000000.png']);
+        $repo = new NewsRepository();
+        $this->assertNull($repo->latest(1)[0]['image_url']);
+        $this->assertNull($repo->findBySlug('ronaldo-gorseli-kayip-haber')['image_url']);
+        $this->assertNull($repo->forSitemap()[0]['image']);
+        $controller = new NewsController();
+        $list = $controller->index(self::request('/haberler'))->body();
+        $this->assertContains('card-media is-placeholder', $list, 'card renders the placeholder');
+        $this->assertNotContains('haber-silinmis-gorsel', $list);
+        $show = $controller->show(self::request('/haber/ronaldo-gorseli-kayip-haber'))->body();
+        $this->assertNotContains('haber-silinmis-gorsel', $show, 'no broken hero image or og:image');
+        $this->assertContains('<meta property="og:image" content="' . url('/assets/img/og-default.png') . '">', $show);
+    }
+
     public function testRssFeedAndIndexNowKey(): void
     {
         $this->insertPost('Ronaldo & Messi: “rekor” <gece>');
@@ -547,6 +793,25 @@ final class NewsTest extends TestCase
         $this->assertTrue(IndexNow::isLocalHost('localhost') && IndexNow::isLocalHost('192.168.1.5') && !IndexNow::isLocalHost('cr7.com.tr'));
     }
 
+    public function testOgImageNamesAreUniquePerPostAndSharedFilesSurvive(): void
+    {
+        $title = 'Cristiano Ronaldo Portekiz Milli Takımı kampından ayrıldıktan sonra federasyonun verdiği cezayla ilgili ilk kez konuştu ve açıklamalar yaptı';
+        $slug = Str::slug($title, 190);
+        $this->assertFalse(NewsPublisher::imageName($slug, $title, 10) === NewsPublisher::imageName($slug . '-2', $title, 11), 'same long title, two posts');
+        $this->assertTrue(strlen(NewsPublisher::imageName($slug, $title, 10)) <= 120, 'fits OgImage::generate');
+
+        // A file two posts share (names made before the id was part of them) outlives deleting one of them.
+        $path = OgImage::generate($title, '20 Ekim 2026', 'haber-test-ortak-gorsel');
+        $first = $this->insertPost('Ortak görsel 1', ['image_path' => $path]);
+        $second = $this->insertPost('Ortak görsel 2', ['image_path' => $path]);
+        Database::execute('DELETE FROM posts WHERE id = ?', [$first]);
+        NewsPublisher::deleteImage($path, $first);
+        $this->assertTrue(is_file(App::basePath('public' . $path)), 'still used by the other post');
+        Database::execute('DELETE FROM posts WHERE id = ?', [$second]);
+        NewsPublisher::deleteImage($path, $second);
+        $this->assertFalse(is_file(App::basePath('public' . $path)), 'removed with its last post');
+    }
+
     public function testOgImage(): void
     {
         $path = OgImage::generate('Cristiano Ronaldo’ya 30 gün hak mahrumiyeti: Portekiz Futbol Federasyonu kararını açıkladı, işte bütün ayrıntılar ve tepkiler', '20 Ekim 2026', 'test-og-gorsel');
@@ -554,8 +819,22 @@ final class NewsTest extends TestCase
         $file = App::basePath('public/og/test-og-gorsel.png');
         $size = getimagesize($file);
         $this->assertSame([1200, 630, 'image/png'], [$size[0], $size[1], $size['mime']]);
+        // 640 px JPEG card for listings (srcset), written next to the PNG.
+        $this->assertSame('/og/test-og-gorsel-640.jpg', OgImage::variant($path));
+        $small = getimagesize(App::basePath('public/og/test-og-gorsel-640.jpg'));
+        $this->assertSame([640, 336, 'image/jpeg'], [$small[0], $small[1], $small['mime']]);
+        $this->assertTrue(filesize(App::basePath('public/og/test-og-gorsel-640.jpg')) < filesize($file), 'smaller than the PNG');
+        $this->assertNull(OgImage::variant('/assets/img/og-default.png'), 'only generated /og/ images');
+        // The first listing card is the LCP image: eager + fetchpriority=high, with the small card in srcset.
+        $first = partial('partials/news-card', ['post' => ['title' => 'Ronaldo', 'url' => '/haber/x', 'image_url' => url($path)], 'priority' => true]);
+        $this->assertContains('fetchpriority="high"', $first);
+        $this->assertNotContains('loading="lazy"', $first);
+        $this->assertContains('srcset="' . url('/og/test-og-gorsel-640.jpg') . ' 640w, ' . url($path) . ' 1200w"', $first);
+        $this->assertContains('loading="lazy"', partial('partials/news-card', ['post' => ['title' => 'Ronaldo', 'url' => '/haber/x', 'image_url' => url($path)]]));
+        $this->assertNotContains('loading="lazy"', partial('partials/news-card', ['post' => ['title' => 'Ronaldo', 'url' => '/haber/x', 'image_url' => url($path)], 'lazy' => false]));
         OgImage::delete($path);
         $this->assertFalse(is_file($file));
+        $this->assertFalse(is_file(App::basePath('public/og/test-og-gorsel-640.jpg')), 'variant deleted with the image');
         OgImage::delete('/../config/config.example.php');
         $this->assertTrue(is_file(App::basePath('config/config.example.php')), 'delete is confined to public/og');
         $lines = OgImage::wrap('bir iki üç dört beş altı yedi', App::basePath('public/assets/fonts/DejaVuSans-Bold.ttf'), 40, 300);

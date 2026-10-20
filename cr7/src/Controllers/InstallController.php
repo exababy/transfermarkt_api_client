@@ -52,7 +52,7 @@ final class InstallController
         if (preg_match(Installer::USERNAME_PATTERN, $username) !== 1) {
             $errors['username'] = 'Kullanıcı adı 3-50 karakter olmalı (harf, rakam, _ . -).';
         }
-        if (strlen($password) < Installer::MIN_PASSWORD_LENGTH) {
+        if (mb_strlen($password) < Installer::MIN_PASSWORD_LENGTH) {
             $errors['password'] = 'Şifre en az ' . Installer::MIN_PASSWORD_LENGTH . ' karakter olmalı.';
         } elseif (!hash_equals($password, (string) $request->input('password_confirm', ''))) {
             $errors['password_confirm'] = 'Şifreler eşleşmiyor.';

@@ -70,7 +70,7 @@ $kitLabels = Shop::KIT_TYPES;
       <article class="card product-card">
         <a class="card-media" href="<?= e(url($product['url'])) ?>" tabindex="-1" aria-hidden="true">
           <?php if ($product['image_url'] !== ''): ?>
-          <img src="<?= e($product['image_url']) ?>" alt="" width="600" height="620"<?= $i < 4 ? ' fetchpriority="' . ($i === 0 ? 'high' : 'auto') . '"' : ' loading="lazy"' ?> decoding="async">
+          <img src="<?= e($product['image_url']) ?>" alt="<?= e(Shop::seoTitle((string) $product['title'])) ?>" width="600" height="620"<?= $i < 4 ? ' fetchpriority="' . ($i === 0 ? 'high' : 'auto') . '"' : ' loading="lazy"' ?> decoding="async">
           <?php endif; ?>
         </a>
         <span class="badge"><?= e($kitLabels[$product['kit_type']] ?? $product['kit_type']) ?></span>

@@ -24,6 +24,9 @@ final class Shop
     public const MAX_QUANTITY = 5;
     public const PRINT_NAME_MAX = 12;
     public const RATE_LIMIT_PER_HOUR = 5;
+    /** Unpaid orders give limited stock back after this many hours (OrderService::expireUnpaid()). */
+    public const CARD_RESERVATION_HOURS = 2;
+    public const TRANSFER_RESERVATION_HOURS = 72;
 
     /** Order fulfilment states (orders.status). */
     public const STATUSES = [
@@ -102,14 +105,28 @@ final class Shop
         return max(0, (int) round($fee * 100));
     }
 
-    /** WhatsApp number as digits only ('' when not configured). */
+    /** WhatsApp number as international digits ('' when not configured). */
     public static function whatsapp(): string
     {
-        $digits = preg_replace('/\D+/', '', (string) Settings::get('shop.whatsapp', '')) ?? '';
-        if (str_starts_with($digits, '0')) {
-            $digits = '90' . substr($digits, 1);
+        return self::normalizeWhatsapp((string) Settings::get('shop.whatsapp', ''));
+    }
+
+    /**
+     * The one WhatsApp normaliser (shop links, contact page, admin save): international digits for
+     * wa.me — '0532 123 45 67' and '532 123 45 67' => '905321234567', '0090…' => '90…'; '' when invalid.
+     */
+    public static function normalizeWhatsapp(string $number): string
+    {
+        $digits = (string) preg_replace('/\D+/', '', $number);
+        if (str_starts_with($digits, '00')) {
+            $digits = substr($digits, 2);
         }
-        return strlen($digits) >= 10 ? $digits : '';
+        if (strlen($digits) === 11 && str_starts_with($digits, '0')) {
+            $digits = '90' . substr($digits, 1);
+        } elseif (strlen($digits) === 10 && str_starts_with($digits, '5')) {
+            $digits = '90' . $digits; // Turkish mobile without the leading 0
+        }
+        return strlen($digits) >= 10 && strlen($digits) <= 15 ? $digits : '';
     }
 
     /** wa.me link with a pre-filled message, or null when no number is configured. */
@@ -199,6 +216,25 @@ final class Shop
     {
         $kit = class_exists(\App\Install\Seeders\ProductSeeder::class) ? \App\Install\Seeders\ProductSeeder::kitFor($slug) : null;
         return (string) ($kit['number'] ?? '7');
+    }
+
+    /**
+     * Product name with the main search term, for <title> and image alt text: "Real Madrid 2013–14
+     * Retro Forması (La Décima)" => "Real Madrid 2013–14 Retro Ronaldo Forması (La Décima)" (≤ 60).
+     */
+    public static function seoTitle(string $title): string
+    {
+        $limit = static fn (string $t): string => mb_strlen($t) <= 60 ? $t : rtrim(mb_substr($t, 0, 59)) . '…';
+        if (preg_match('/ronaldo|cr7/iu', $title) === 1) {
+            return $limit($title);
+        }
+        $seo = preg_match('/\bForması\b/u', $title) === 1
+            ? (string) preg_replace('/\bForması\b/u', 'Ronaldo Forması', $title, 1)
+            : $title . ' – Cristiano Ronaldo';
+        if (mb_strlen($seo) > 60) {
+            $seo = (string) preg_replace('/\s*\([^)]*\)\s*$/u', '', $seo); // drop a trailing "(La Décima)"
+        }
+        return mb_strlen($seo) <= 60 ? $seo : $limit($title);
     }
 
     /** Display text where "2016–17" never breaks at the dash (word joiners around en dashes between digits). */

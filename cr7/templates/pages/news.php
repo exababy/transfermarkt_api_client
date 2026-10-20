@@ -34,7 +34,7 @@
     <?php else: ?>
     <div class="grid grid-3">
       <?php foreach ($posts as $i => $post): ?>
-      <?= partial('partials/news-card', ['post' => $post, 'headingTag' => 'h3']) ?>
+      <?= partial('partials/news-card', ['post' => $post, 'headingTag' => 'h3', 'priority' => $i === 0, 'lazy' => $i >= 3]) ?>
       <?php endforeach; ?>
     </div>
     <?= partial('partials/pagination', ['current' => $page, 'total' => $pages, 'baseUrl' => $baseUrl]) ?>

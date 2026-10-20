@@ -56,6 +56,7 @@ final class ShopController
             title: $title,
             description: $description,
             canonical: $canonical,
+            robots: $clubName !== null && count($products) < Seo::LISTING_INDEX_MIN ? 'noindex,follow' : 'index,follow,max-image-preview:large',
             jsonLd: [[
                 '@type' => 'ItemList',
                 'name' => $title,
@@ -87,9 +88,12 @@ final class ShopController
         if (!Shop::enabled()) {
             return Response::notFound();
         }
-        $product = (new ProductRepository())->findBySlug((string) $request->param('slug'));
+        $products = new ProductRepository();
+        $slug = (string) $request->param('slug');
+        $product = $products->findBySlug($slug);
         if ($product === null) {
-            return Response::notFound();
+            $moved = $products->movedSlug($slug); // renamed in the admin
+            return $moved !== null ? Response::redirect(url('/forma/' . $moved), 301) : Response::notFound();
         }
         return $this->renderProduct($product);
     }
@@ -134,6 +138,7 @@ final class ShopController
         return self::private(Response::html(View::render('pages/order-status', [
             'seo' => $seo,
             'activeNav' => 'magaza',
+            'noAnalytics' => true, // the URL key is the only credential for the buyer's personal data
             'extraHead' => self::styles(),
             'order' => $order,
             'product' => $product,
@@ -166,7 +171,9 @@ final class ShopController
     {
         $payments ??= new PaymentManager();
         $repo = new ProductRepository();
-        $ordersOpen = Shop::ordersOpen($payments);
+        // A sold-out limited product shows "Tükendi" instead of a form that could only end in a 409.
+        $soldOut = $product['stock'] !== null && (int) $product['stock'] <= 0;
+        $ordersOpen = !$soldOut && Shop::ordersOpen($payments);
         $gateways = $ordersOpen ? $payments->available() : [];
         $service = new OrderService(null, $repo, $payments);
         $quote = $service->quote($product, 1, $product['allow_print']);
@@ -180,10 +187,12 @@ final class ShopController
         };
         $pageUrl = url($product['url']);
         $share = KitIllustrator::pngPath((string) $product['slug']);
-        $images = array_values(array_unique(array_filter([
-            $share !== null ? url($share) : null,
-            ...array_map(static fn (array $g): string => url($g['url']), $product['gallery']),
-        ])));
+        // Product.image: the clean product renders only. The 1200x630 share card (title text,
+        // "FORMA MAĞAZASI" pill, watermark) is a promotional overlay: og:image only.
+        $images = array_values(array_unique(array_filter(array_map(static fn (array $g): string => url($g['url']), $product['gallery']))));
+        if ($images === [] && $share !== null) {
+            $images = [url($share)];
+        }
         $plain = trim((string) preg_replace('/\s+/u', ' ', (string) $product['description']));
         $price = Shop::decimal($base['unit_kurus']);
         $productLd = array_filter([
@@ -193,7 +202,8 @@ final class ShopController
             'description' => Str::limit($plain, 500),
             'image' => $images,
             'sku' => 'CR7-F' . str_pad((string) $product['id'], 4, '0', STR_PAD_LEFT),
-            'brand' => ['@type' => 'Brand', 'name' => $product['club_name']],
+            // Not a club-licensed product (no crest, no sponsor logos): the brand is the shop's own.
+            'brand' => ['@type' => 'Brand', 'name' => Seo::siteName()],
             'category' => 'Futbol Forması',
             'size' => $product['sizes'] !== [] ? implode(', ', $product['sizes']) : null,
             'offers' => [
@@ -202,8 +212,14 @@ final class ShopController
                 'price' => $price,
                 'priceCurrency' => 'TRY',
                 'availability' => $availability,
+                'priceValidUntil' => gmdate('Y-m-d', strtotime('+1 year')),
                 'itemCondition' => 'https://schema.org/NewCondition',
                 'seller' => ['@type' => 'Organization', 'name' => Seo::siteName(), 'url' => url('/')],
+                'shippingDetails' => [
+                    '@type' => 'OfferShippingDetails',
+                    'shippingRate' => ['@type' => 'MonetaryAmount', 'value' => Shop::decimal(Shop::shippingFeeKurus()), 'currency' => 'TRY'],
+                    'shippingDestination' => ['@type' => 'DefinedRegion', 'addressCountry' => 'TR'],
+                ],
                 'hasMerchantReturnPolicy' => [
                     '@type' => 'MerchantReturnPolicy',
                     'applicableCountry' => 'TR',
@@ -218,7 +234,7 @@ final class ShopController
 
         $number = Shop::defaultNumber((string) $product['slug']);
         $seo = new Seo(
-            title: $product['title'],
+            title: Shop::seoTitle((string) $product['title']),
             description: Str::limit($product['title'] . ': ' . Format::price($price) . '. ' . ($product['club_id'] === '3300' ? 'Kaptan Ronaldo’nun Portekiz milli takımı renklerinde forma; ' : 'Ronaldo’nun ' . $product['club_name'] . ' dönemini anımsatan forma; ')
                 . ($product['kids_sizes'] !== [] ? 'S–XXL ve çocuk bedenleri' : 'S–XXL bedenler') . ($product['allow_print'] ? ', RONALDO ' . $number . ' baskı seçeneği.' : '.'), 160),
             canonical: $pageUrl,
@@ -234,7 +250,8 @@ final class ShopController
                 ['property' => 'product:price:amount', 'content' => $price],
                 ['property' => 'product:price:currency', 'content' => 'TRY'],
                 ['property' => 'product:availability', 'content' => $ordersOpen ? 'preorder' : 'out of stock'],
-                ['property' => 'product:brand', 'content' => (string) $product['club_name']],
+                ['property' => 'product:brand', 'content' => Seo::siteName()],
+                ...($share !== null ? [['property' => 'og:image:width', 'content' => '1200'], ['property' => 'og:image:height', 'content' => '630']] : []),
             ],
         );
 
@@ -245,6 +262,7 @@ final class ShopController
             'product' => $product,
             'ordersOpen' => $ordersOpen,
             'ordersSwitchedOn' => Shop::ordersEnabled(),
+            'soldOut' => $soldOut,
             'gateways' => $gateways,
             'quote' => $quote,
             'basePriceKurus' => $base['unit_kurus'],

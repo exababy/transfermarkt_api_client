@@ -23,6 +23,33 @@ final class StatsRepository
     /** Result filter values used in URLs (?sonuc=) => games.result */
     public const RESULT_SLUGS = ['galibiyet' => 'W', 'beraberlik' => 'D', 'maglubiyet' => 'L'];
 
+    /**
+     * Turkish display names for competitions Transfermarkt's tr-TR feed leaves in English/Spanish
+     * or marks with "(- 2009)". Proper league names (Premier League, LaLiga, Serie A) stay.
+     */
+    public const COMPETITION_NAMES = [
+        'CONC' => 'Konfederasyonlar Kupası',
+        'SAKC' => 'Suudi Kral Kupası',
+        'SASS' => 'Suudi Süper Kupası',
+        'SA1' => 'Suudi Pro Lig',
+        'GBCS' => 'İngiltere Süper Kupası',
+        'CGB' => 'İngiltere Lig Kupası',
+        'SUC' => 'İspanya Süper Kupası',
+        'SCI' => 'İtalya Süper Kupası',
+        'POSU' => 'Portekiz Süper Kupası',
+        'POPO' => 'Portekiz Kupası',
+        'UEFA' => 'UEFA Kupası (2009’a kadar)',
+        'AFCL' => 'AFC Şampiyonlar Ligi (2024’e kadar)',
+        'ACLQ' => 'AFC Şampiyonlar Ligi Elemeleri',
+        'AA17' => 'Algarve U17 Turnuvası',
+    ];
+
+    /** Display name of a competition (Turkish map, else the stored name, else the id). */
+    public static function competitionName(?string $id, ?string $name): string
+    {
+        return self::COMPETITION_NAMES[(string) $id] ?? (string) (($name ?? '') !== '' ? $name : $id);
+    }
+
     /** Turkish labels for games.participation. */
     public const PARTICIPATION_LABELS = [
         'played' => 'Oynadı',
@@ -216,6 +243,39 @@ final class StatsRepository
         return is_string($value) && $value !== '' ? $value : null;
     }
 
+    /**
+     * When the numbers really last changed (sitemap lastmod): the latest match (kick-off + 2 h)
+     * up to the last sync, not the cron time — the sync rewrites updated_at on every run.
+     */
+    public function dataChangedAt(): ?string
+    {
+        $sync = $this->lastSyncedAt();
+        if ($sync === null) {
+            return null;
+        }
+        $game = self::safe(static fn () => Database::fetchValue('SELECT MAX(date_utc) FROM games WHERE date_utc <= ?', [$sync]), null);
+        if (!is_string($game) || $game === '') {
+            return $sync;
+        }
+        $end = gmdate('Y-m-d H:i:s', (int) strtotime($game . ' UTC') + 7200);
+        return strcmp($end, $sync) < 0 ? $end : $sync;
+    }
+
+    /** dataChangedAt() per season (its latest match): season_id => UTC datetime. */
+    public function seasonChangedAt(): array
+    {
+        $sync = $this->lastSyncedAt();
+        if ($sync === null) {
+            return [];
+        }
+        $out = [];
+        foreach ((array) self::safe(static fn () => Database::fetchAll('SELECT season_id, MAX(date_utc) AS last_game FROM games WHERE date_utc <= ? GROUP BY season_id', [$sync]), []) as $row) {
+            $end = gmdate('Y-m-d H:i:s', (int) strtotime($row['last_game'] . ' UTC') + 7200);
+            $out[(int) $row['season_id']] = strcmp($end, $sync) < 0 ? $end : $sync;
+        }
+        return $out;
+    }
+
     // ------------------------------------------------------------------ helpers for the stats pages
 
     /** Full STATCOLS of a stats_summary scope ('career' | 'clubs' | 'national'); zeros when missing. */
@@ -253,7 +313,7 @@ final class StatsRepository
         ), []);
         return array_map(static fn (array $r): array => self::statInts($r) + [
             'competition_id' => (string) $r['competition_id'],
-            'name' => (string) ($r['name'] ?? $r['competition_id']),
+            'name' => self::competitionName((string) $r['competition_id'], $r['name'] ?? null),
             'logo_url' => $r['logo_url'] ?? null,
         ], $rows);
     }
@@ -295,7 +355,7 @@ final class StatsRepository
         ), []);
         return array_map(static fn (array $r): array => self::statInts($r) + [
             'competition_id' => (string) $r['competition_id'],
-            'name' => (string) ($r['name'] ?? $r['competition_id']),
+            'name' => self::competitionName((string) $r['competition_id'], $r['name'] ?? null),
             'logo_url' => $r['logo_url'] ?? null,
             'seasons' => (int) $r['seasons'],
         ], $rows);
@@ -400,7 +460,7 @@ final class StatsRepository
                 $r[$key] = isset($r[$key]) ? (int) $r[$key] : null;
             }
             $r['game_id'] = (string) $r['game_id'];
-            $r['competition_name'] = (string) ($r['competition_name'] ?? $r['competition_id'] ?? '');
+            $r['competition_name'] = self::competitionName(isset($r['competition_id']) ? (string) $r['competition_id'] : null, $r['competition_name'] ?? null);
             $r['club_name'] = (string) ($r['club_name'] ?? $r['club_id'] ?? '');
             $r['opponent_name'] = (string) ($r['opponent_name'] ?? $r['opponent_id'] ?? '');
             $r['club_logo'] = ClubRepository::logo($r['club_logo_raw'] ?? null, 'sm');
@@ -441,7 +501,7 @@ final class StatsRepository
         ), []);
         $out = [];
         foreach ($rows as $row) {
-            $out[(string) $row['competition_id']] = ['name' => (string) ($row['name'] ?? $row['competition_id']), 'games' => (int) $row['games']];
+            $out[(string) $row['competition_id']] = ['name' => self::competitionName((string) $row['competition_id'], $row['name'] ?? null), 'games' => (int) $row['games']];
         }
         return $out;
     }

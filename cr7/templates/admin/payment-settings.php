@@ -10,8 +10,10 @@
  * @var bool $ordersOpen
  * @var array<string, string> $callbacks gateway => absolute callback URL
  * @var array<string, string> $companyFields
+ * @var list<string> $paymentWarnings active gateways in test mode
  */
 
+$paymentWarnings ??= [];
 $submitted = $old !== [];
 $val = static function (string $name) use ($old, $current, $submitted): string {
     $value = $submitted ? ($old[$name] ?? '') : ($current[$name] ?? '');
@@ -66,6 +68,9 @@ $copy = static fn (string $id, string $value): string => '<div class="input-grou
       ? '<strong>Siparişler açık.</strong> Ürün sayfalarında sipariş formu görünüyor.'
       : '<strong>Siparişler kapalı.</strong> Mağaza herkese açık ve arama motorlarında görünür; ürün sayfalarında “Yakında satışta” yazar, sipariş isteği 403 ile reddedilir.' ?>
 </div>
+<?php foreach ($paymentWarnings as $warning): ?>
+<div class="notice notice-warning" role="status" data-payment-test-mode><strong>Test modu açık.</strong> <?= e($warning) ?></div>
+<?php endforeach; ?>
 
 <nav class="settings-nav" aria-label="Ayar bölümleri">
   <a href="#magaza">Mağaza</a>

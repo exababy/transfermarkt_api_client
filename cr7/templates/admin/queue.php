@@ -11,6 +11,7 @@
  * @var array<string, string> $sources
  * @var array<int, int> $clusterSizes
  * @var array<int, array<string, mixed>> $posts
+ * @var array<int, array<string, mixed>> $storyPosts item id => live post of its (already published) story
  * @var array<string, mixed>|null $result last "Şimdi yayınla" result
  * @var bool $publisherAvailable
  * @var string $back
@@ -30,7 +31,9 @@ $hasFilters = $filters['durum'] !== '' || $filters['kaynak'] !== '' || $filters[
   <p class="cluster">
     <a class="btn btn-sm btn-primary" href="<?= e(url('/haber/' . $result['post']['slug'])) ?>" target="_blank" rel="noopener">Haberi görüntüle ↗</a>
     <a class="btn btn-sm" href="<?= e(url('/admin/haberler/' . (int) $result['post']['id'] . '/duzenle')) ?>">Düzenle</a>
-    <span class="muted text-sm"><?= e($result['message']) ?></span>
+    <?php // NewsPublisher::lastMessage() = "Yayınlandı: <title> (özgünlük %…, N kaynak)." — show only the details here.
+    $detail = preg_match('/\((özgünlük[^)]*)\)\.?$/u', (string) $result['message'], $dm) === 1 ? $dm[1] : (string) $result['message']; ?>
+    <span class="muted text-sm"><?= e($detail) ?></span>
   </p>
   <?php else: ?>
   <p><strong>#<?= (int) $result['item_id'] ?> yayınlanamadı:</strong> <?= e($result['message']) ?></p>
@@ -110,7 +113,7 @@ $hasFilters = $filters['durum'] !== '' || $filters['kaynak'] !== '' || $filters[
           $id = (int) $item['id'];
           $primary = QueueController::clusterOf($item['note'] ?? null);
           $members = $clusterSizes[$id] ?? 0;
-          $note = QueueController::noteText($item['note'] ?? null);
+          $note = QueueController::noteLabel($item['note'] ?? null);
           $post = !empty($item['post_id']) ? ($posts[(int) $item['post_id']] ?? null) : null;
           $date = $item['published_at'] ?: $item['fetched_at'];
       ?>
@@ -141,7 +144,9 @@ $hasFilters = $filters['durum'] !== '' || $filters['kaynak'] !== '' || $filters[
             <a class="btn btn-sm" href="<?= e(url('/admin/haberler/' . (int) $post['id'] . '/duzenle')) ?>">Yazıyı düzenle</a>
             <?php if ($post['status'] === 'published'): ?><a class="btn btn-sm btn-ghost" href="<?= e(url('/haber/' . $post['slug'])) ?>" target="_blank" rel="noopener">Görüntüle ↗</a><?php endif; ?>
             <?php else: ?>
-            <?php if ($item['status'] !== 'published'): ?>
+            <?php if (isset($storyPosts[$id])): $live = $storyPosts[$id]; ?>
+            <a class="btn btn-sm btn-ghost" href="<?= e(url('/admin/haberler/' . (int) $live['id'] . '/duzenle')) ?>" title="<?= e($live['title']) ?>">Hikâye #<?= (int) $live['id'] ?> ile yayında</a>
+            <?php elseif ($item['status'] !== 'published'): ?>
             <form method="post" action="<?= e(url('/admin/haber-kuyrugu/' . $id . '/yayinla')) ?>" data-busy="Yayınlanıyor…" data-confirm="Bu haber günlük limit ve yayın aralığı beklenmeden şimdi yayınlansın mı?">
               <?= csrf_field() ?>
               <input type="hidden" name="_back" value="<?= e($back) ?>">

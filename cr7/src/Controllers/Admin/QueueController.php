@@ -55,9 +55,9 @@ final class QueueController
             $params[] = $source;
         }
         if ($q !== '') {
-            $where[] = "(title LIKE ? ESCAPE '\\' OR description LIKE ? ESCAPE '\\' OR url LIKE ? ESCAPE '\\')";
-            $like = AdminPage::like($q);
-            array_push($params, $like, $like, $like);
+            [$sql, $likeParams] = Database::containsAny(['title', 'description', 'url'], $q);
+            $where[] = $sql;
+            array_push($params, ...$likeParams);
         }
         if ($cluster > 0) {
             $where[] = '(id = ? OR note = ? OR note LIKE ?)';
@@ -87,6 +87,7 @@ final class QueueController
             'sources' => self::sourceOptions(),
             'clusterSizes' => self::clusterSizes(),
             'posts' => self::postsFor($items),
+            'storyPosts' => self::storyPostsFor($items),
             'result' => Session::pull(self::RESULT_KEY),
             'publisherAvailable' => class_exists(NewsPublisher::class),
             'back' => AdminPage::currentPath($request),
@@ -174,6 +175,34 @@ final class QueueController
         return trim((string) preg_replace('/(?:^|;)\s*cluster:\d+\s*;?/', '', (string) $note), " ;");
     }
 
+    /**
+     * Human-readable Turkish note for the queue table: failure reasons (NewsPublisher::REASONS),
+     * 'evidence-only' (Google News items) and 'post:<id>' (story already published), with the raw code.
+     */
+    public static function noteLabel(?string $note): string
+    {
+        $text = self::noteText($note);
+        if ($text === '') {
+            return '';
+        }
+        $labels = class_exists(NewsPublisher::class) && defined(NewsPublisher::class . '::REASONS') ? NewsPublisher::REASONS : [];
+        // Plain Turkish for the owner; the raw code is kept only for failure reasons (log lookups).
+        $labels['evidence-only'] = 'Bu kayıt yalnızca doğrulama kaynağı olarak kullanılır (Google Haberler); haber metni aynı hikâyenin diğer kaynaklarından derlenir';
+        $parts = [];
+        foreach (preg_split('/\s*;\s*/', $text, -1, PREG_SPLIT_NO_EMPTY) ?: [] as $part) {
+            if (preg_match('/^post:(\d+)$/', $part, $m) === 1) {
+                $parts[] = 'hikâye zaten #' . $m[1] . ' numaralı haberle yayınlandı';
+            } elseif (preg_match('/^([a-z-]+)(?:\s*\((.+)\))?$/', $part, $m) === 1 && isset($labels[$m[1]])) {
+                // "31.5%" (stored by the pipeline) => Turkish "%31,5".
+                $detail = isset($m[2]) ? (string) preg_replace_callback('/^(\d+)(?:[.,](\d+))?\s*%$/', static fn (array $p): string => \App\Support\Format::percent((float) ($p[1] . '.' . ($p[2] ?? '0')), strlen($p[2] ?? '')), $m[2]) : null;
+                $parts[] = $labels[$m[1]] . ($detail !== null ? ' (' . $detail . ')' : '') . ($m[1] === 'evidence-only' ? '' : ' [' . $m[1] . ']');
+            } else {
+                $parts[] = $part;
+            }
+        }
+        return implode('; ', $parts);
+    }
+
     /** @return array<int, int> primary item id => number of other items in its story cluster */
     private static function clusterSizes(): array
     {
@@ -225,5 +254,28 @@ final class QueueController
             $out[(int) $row['id']] = $row;
         }
         return $out;
+    }
+
+    /**
+     * Items whose story is already live through another item or a manual post (no "Şimdi
+     * yayınla" for them): item id => post row.
+     *
+     * @param list<array<string, mixed>> $items
+     * @return array<int, array{id: int, slug: string, title: string, status: string}>
+     */
+    private static function storyPostsFor(array $items): array
+    {
+        if (!class_exists(NewsPublisher::class) || !method_exists(NewsPublisher::class, 'storyPost')) {
+            return [];
+        }
+        $publisher = new NewsPublisher();
+        $postIds = [];
+        foreach ($items as $item) {
+            if (empty($item['post_id']) && $item['status'] !== 'published' && ($postId = $publisher->storyPost($item)) !== null) {
+                $postIds[(int) $item['id']] = $postId;
+            }
+        }
+        $posts = self::postsFor(array_map(static fn (int $id): array => ['post_id' => $id], array_values($postIds)));
+        return array_filter(array_map(static fn (int $id): ?array => $posts[$id] ?? null, $postIds));
     }
 }

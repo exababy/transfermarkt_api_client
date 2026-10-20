@@ -152,8 +152,8 @@ final class ProductsController
             $values['shop.shipping_fee'] = $fee;
         }
         $whatsapp = $in('shop_whatsapp', 30);
-        $digits = preg_replace('/\D+/', '', $whatsapp) ?? '';
-        if ($whatsapp !== '' && (strlen($digits) < 10 || strlen($digits) > 15)) {
+        $digits = Shop::normalizeWhatsapp($whatsapp); // stored with the country code: 532… => 90532…
+        if ($whatsapp !== '' && $digits === '') {
             $errors['shop_whatsapp'] = 'WhatsApp numarasını ülke koduyla yazın (ör. 905321234567).';
         } else {
             $values['shop.whatsapp'] = $digits;
@@ -315,6 +315,7 @@ final class ProductsController
             'masked' => $masked,
             'gateways' => $gatewayState,
             'ordersOpen' => Shop::ordersOpen($payments),
+            'paymentWarnings' => $payments->testModeWarnings(),
             'callbacks' => [
                 'paytr' => url('/odeme/paytr/bildirim'),
                 'iyzico' => url('/odeme/iyzico/donus'),

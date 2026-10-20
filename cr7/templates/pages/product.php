@@ -4,8 +4,9 @@
  * "Yakında satışta" box (+ optional WhatsApp "Haber ver" link) is shown and no form exists in the HTML.
  *
  * @var array<string, mixed> $product decorated ProductRepository row
- * @var bool $ordersOpen
+ * @var bool $ordersOpen (false while a limited product is sold out)
  * @var bool $ordersSwitchedOn admin switch (true but no payment method => still closed)
+ * @var bool $soldOut limited stock used up: "Tükendi" box instead of the form
  * @var array<string, \App\Services\Payment\PaymentGateway> $gateways available payment methods
  * @var array<string, mixed> $quote OrderService::quote() for 1 piece with default printing
  * @var int $basePriceKurus
@@ -53,7 +54,7 @@ $labels = Shop::KIT_TYPES;
         <?php endforeach; ?>
       </div>
       <?php endif; ?>
-      <p class="form-help gallery-note">Görseller temsilidir; kulüp arması ve sponsor logoları gösterilmez.</p>
+      <p class="form-help gallery-note">Görseller temsilidir; kulüp arması ve sponsor logoları gösterilmez. Ürün, kulüplerin resmi lisanslı ürünü değil, CR7.com.tr’nin arma ve sponsor logosu içermeyen taraftar formasıdır.</p>
     </div>
 
     <div class="product-info">
@@ -83,18 +84,29 @@ $labels = Shop::KIT_TYPES;
           <label for="hp-website">Web siteniz (boş bırakın)</label>
           <input type="text" id="hp-website" name="<?= e(OrderService::HONEYPOT) ?>" value="" tabindex="-1" autocomplete="off">
         </div>
-        <?php if ($errors !== []): ?>
-        <div class="notice notice-error" role="alert">
+        <?php if ($errors !== []):
+            // Error summary (focused + scrolled into view by the script below); each item links to its field.
+            $fieldIds = ['size' => 'size-0', 'payment_method' => 'pay-' . (string) array_key_first($gateways)];
+            $fieldErrors = array_diff_key($errors, ['form' => true]);
+        ?>
+        <div class="notice notice-error" id="order-errors" role="alert" tabindex="-1">
           <strong class="notice-title">Sipariş oluşturulamadı</strong>
           <?= isset($errors['form']) ? e($errors['form']) : 'Lütfen işaretli alanları kontrol edin.' ?>
+          <?php if ($fieldErrors !== []): ?>
+          <ul class="error-list">
+            <?php foreach ($fieldErrors as $key => $message): ?>
+            <li><a href="#<?= e($fieldIds[$key] ?? $key) ?>"><?= e($message) ?></a></li>
+            <?php endforeach; ?>
+          </ul>
+          <?php endif; ?>
         </div>
         <?php endif; ?>
 
         <fieldset class="size-group">
           <legend>Beden <span class="text-gold" aria-hidden="true">*</span></legend>
           <div class="size-options">
-            <?php foreach ($p['sizes'] as $size): ?>
-            <label class="size-option"><input type="radio" name="size" value="<?= e($size) ?>"<?= $selectedSize === $size ? ' checked' : '' ?> required><span><?= e($size) ?></span></label>
+            <?php foreach (array_values($p['sizes']) as $i => $size): ?>
+            <label class="size-option"><input type="radio" name="size" value="<?= e($size) ?>"<?= $i === 0 ? ' id="size-0"' : '' ?><?= $selectedSize === $size ? ' checked' : '' ?> required><span><?= e($size) ?></span></label>
             <?php endforeach; ?>
           </div>
           <?php if ($p['kids_sizes'] !== []): ?>
@@ -184,7 +196,7 @@ $labels = Shop::KIT_TYPES;
           <div class="pay-options" role="radiogroup" aria-labelledby="pay-title">
             <?php foreach ($gateways as $key => $gateway): ?>
             <label class="pay-option">
-              <input type="radio" name="payment_method" value="<?= e($key) ?>"<?= $selectedMethod === $key ? ' checked' : '' ?> required>
+              <input type="radio" name="payment_method" value="<?= e($key) ?>" id="pay-<?= e($key) ?>"<?= $selectedMethod === $key ? ' checked' : '' ?> required>
               <span><strong><?= e($gateway->label()) ?></strong><small><?= e($gateway->description()) ?></small></span>
             </label>
             <?php endforeach; ?>
@@ -204,15 +216,24 @@ $labels = Shop::KIT_TYPES;
         </div>
 
         <div class="order-section">
-          <label class="checkbox"><input type="checkbox" name="kvkk" value="1"<?= $val('kvkk') === '1' ? ' checked' : '' ?> required<?= $aria('kvkk') ?>>
+          <label class="checkbox"><input type="checkbox" name="kvkk" id="kvkk" value="1"<?= $val('kvkk') === '1' ? ' checked' : '' ?> required<?= $aria('kvkk') ?>>
             <span>Kişisel verilerimin siparişin işlenmesi ve teslimatı amacıyla işlenmesine ilişkin <a href="<?= e(url('/gizlilik-politikasi')) ?>" target="_blank" rel="noopener">KVKK Aydınlatma Metni</a>’ni okudum.</span></label>
           <?= $err('kvkk') ?>
-          <label class="checkbox"><input type="checkbox" name="contract" value="1"<?= $val('contract') === '1' ? ' checked' : '' ?> required<?= $aria('contract') ?>>
+          <label class="checkbox"><input type="checkbox" name="contract" id="contract" value="1"<?= $val('contract') === '1' ? ' checked' : '' ?> required<?= $aria('contract') ?>>
             <span><a href="<?= e(url('/on-bilgilendirme-formu')) ?>" target="_blank" rel="noopener">Ön Bilgilendirme Formu</a>’nu ve <a href="<?= e(url('/mesafeli-satis-sozlesmesi')) ?>" target="_blank" rel="noopener">Mesafeli Satış Sözleşmesi</a>’ni okudum, kabul ediyorum. Kişiye özel baskılı ürünlerde cayma hakkının bulunmadığını biliyorum.</span></label>
           <?= $err('contract') ?>
           <button class="btn btn-gold btn-lg btn-block" type="submit">Siparişi tamamla ve ödemeye geç</button>
         </div>
       </form>
+      <?php elseif (!empty($soldOut) && $ordersSwitchedOn): ?>
+      <div class="soon-box" id="yakinda">
+        <span class="badge">Tükendi</span>
+        <h2>Bu formanın stoğu tükendi</h2>
+        <p>Stok yenilendiğinde sipariş formu bu sayfada yeniden açılacak.</p>
+        <?php if ($whatsappLink !== null): ?>
+        <div><a class="btn btn-gold" href="<?= e($whatsappLink) ?>" target="_blank" rel="nofollow noopener">WhatsApp ile haber ver</a></div>
+        <?php endif; ?>
+      </div>
       <?php else: ?>
       <div class="soon-box" id="yakinda">
         <span class="badge">Yakında satışta</span>
@@ -264,7 +285,7 @@ $labels = Shop::KIT_TYPES;
       <?php foreach ($related as $item): ?>
       <article class="card product-card">
         <a class="card-media" href="<?= e(url($item['url'])) ?>" tabindex="-1" aria-hidden="true">
-          <?php if ($item['image_url'] !== ''): ?><img src="<?= e($item['image_url']) ?>" alt="" width="600" height="620" loading="lazy" decoding="async"><?php endif; ?>
+          <?php if ($item['image_url'] !== ''): ?><img src="<?= e($item['image_url']) ?>" alt="<?= e(Shop::seoTitle((string) $item['title'])) ?>" width="600" height="620" loading="lazy" decoding="async"><?php endif; ?>
         </a>
         <span class="badge"><?= e($labels[$item['kit_type']] ?? $item['kit_type']) ?></span>
         <div class="card-body">
@@ -293,6 +314,20 @@ $labels = Shop::KIT_TYPES;
   });
   var form = document.getElementById('order-form');
   if (!form) return;
+  // After a rejected submit (422) the page reloads at the top: bring the error summary into view and
+  // focus it; its links move focus to the field they describe.
+  var errorBox = document.getElementById('order-errors');
+  if (errorBox) {
+    errorBox.focus({ preventScroll: true });
+    errorBox.scrollIntoView({ block: 'start' });
+    errorBox.addEventListener('click', function (ev) {
+      var link = ev.target.closest('a[href^="#"]');
+      var field = link && document.getElementById(link.getAttribute('href').slice(1));
+      if (!field) return;
+      ev.preventDefault();
+      field.focus();
+    });
+  }
   var base = +form.getAttribute('data-base'), print = +form.getAttribute('data-print'), ship = +form.getAttribute('data-shipping');
   var toggle = document.getElementById('print-toggle'), fields = document.getElementById('print-fields'), qty = document.getElementById('quantity');
   function money(k) { return (k / 100).toLocaleString('tr-TR', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) + ' TL'; }

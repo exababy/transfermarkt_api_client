@@ -11,6 +11,7 @@ use App\Repositories\ClubRepository;
 use App\Repositories\StatsRepository;
 use App\Services\Transfermarkt\TransfermarktSync;
 use App\Support\Format;
+use App\Support\OgImage;
 use App\Support\Str;
 
 /**
@@ -30,6 +31,7 @@ final class ClubsController
         }
         $youth = array_values(array_filter($stats->nationalCareer(), static fn (array $r): bool => $r['club_id'] !== TransfermarktSync::NATIONAL_TEAM_ID));
 
+        $card = OgImage::page('takimlar', 'Cristiano Ronaldo’nun Oynadığı Takımlar', 'Kulüp kulüp istatistikler', 'TAKIMLAR');
         $seo = new Seo(
             title: 'Cristiano Ronaldo’nun Oynadığı Takımlar ve İstatistikleri',
             description: 'Cristiano Ronaldo’nun forma giydiği Sporting CP, Manchester United, Real Madrid, Juventus, Al-Nassr ve Portekiz’deki maç, gol ve asist sayıları.',
@@ -41,6 +43,8 @@ final class ClubsController
                 'itemListElement' => $itemList,
             ]],
             breadcrumbs: [['name' => 'Oynadığı Takımlar']],
+            image: $card,
+            extraMeta: OgImage::meta($card),
         );
         return view('pages/clubs', [
             'seo' => $seo,
@@ -81,11 +85,14 @@ final class ClubsController
         $prev = $index !== false && $index > 0 ? $all[$index - 1] : null;
         $next = $index !== false && $index < count($all) - 1 ? $all[$index + 1] : null;
 
+        $card = OgImage::page('takim-' . $page['slug'], 'Cristiano Ronaldo ve ' . $name, 'Maç, gol ve asistler', 'TAKIMLAR');
         $seo = new Seo(
             title: self::title($name),
             description: self::description($name, $period, $totals),
+            image: $card,
             jsonLd: [self::teamSchema($page, $club, $logo)],
             breadcrumbs: [['name' => 'Oynadığı Takımlar', 'url' => '/takimlar'], ['name' => $name]],
+            extraMeta: OgImage::meta($card),
         );
 
         return view('pages/club', [
@@ -99,6 +106,7 @@ final class ClubsController
             'spells' => $spells,
             'totals' => $totals,
             'seasons' => $seasons,
+            'matchSeasons' => $stats->seasonOptions(),
             'competitions' => $stats->clubCompetitions($clubId),
             'opponents' => $stats->topOpponents(10, $filters),
             'wins' => $stats->biggestWins(8, $filters),
@@ -212,7 +220,7 @@ final class ClubsController
             'name' => $page['is_national'] ? 'Portekiz Milli Futbol Takımı' : (string) ($club['name'] ?? $page['name']),
             'sport' => 'Soccer',
             'url' => url($page['url']),
-            'athlete' => ['@type' => 'Person', 'name' => 'Cristiano Ronaldo', 'url' => url('/hayati')],
+            'athlete' => LifeController::personRef(),
         ];
         if (!$page['is_national'] && !empty($club['name']) && $club['name'] !== $page['name']) {
             $schema['alternateName'] = $page['name'];

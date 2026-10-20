@@ -40,6 +40,9 @@ final class Categorizer
     /** Other famous "Ronaldo"s (R9, Ronaldinho is covered by the boundary rule). */
     private const OTHER_RONALDOS = ['nazário', 'nazario', 'r9', 'fenômeno', 'fenomeno', 'o fenômeno'];
 
+    /** Non-football uploads: UR · Cristiano also streams MMA events and eSports promos. */
+    private const OFF_TOPIC_TERMS = ['mma', 'ufc', 'esports', 'e-sports', 'boxing', 'boks', 'poker'];
+
     /**
      * Category key from VideoRepository::categories().
      *
@@ -103,6 +106,24 @@ final class Categorizer
             }
         }
         return true;
+    }
+
+    /**
+     * Off-topic for a football fan site (MMA, boxing, eSports, poker promos): judged by the title
+     * only, since channel descriptions are boilerplate. VideoSync neither imports nor lists these.
+     */
+    public static function isOffTopic(string $title): bool
+    {
+        if (str_contains($title, '🥊')) {
+            return true;
+        }
+        $haystack = self::haystack($title);
+        foreach (self::OFF_TOPIC_TERMS as $term) {
+            if (self::matches($haystack, $term)) {
+                return true;
+            }
+        }
+        return false;
     }
 
     /** YouTube Shorts: /shorts/ link, or duration under 61 seconds when known. */

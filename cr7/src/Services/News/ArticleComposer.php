@@ -14,17 +14,48 @@ use App\Support\Html;
 use App\Support\Str;
 
 /**
- * Builds an ORIGINAL post from a story cluster (no AI): template intro, spun sentences of the
- * primary source followed by non-redundant spun sentences of up to spinner.max_sources other
- * sources (joined with neutral connectors), a stats context paragraph (StatsRepository), a
- * template outro and a "Kaynak:" line linking every source.
+ * Builds an ORIGINAL post from a story cluster (no AI): template intro, rewritten sentences of the
+ * primary source mixed (paragraph by paragraph) with non-redundant rewritten sentences of up to
+ * spinner.max_sources other sources (joined with neutral connectors), a club background paragraph, a
+ * stats context paragraph (StatsRepository), a template outro and a "Kaynak:" line linking every source.
  *
- * Uniqueness = share of word 3-shingles of the post that do not occur in a source, measured against
- * EACH source (the lowest value counts). Below spinner.min_change_ratio extra passes are applied;
- * if it is still too low the result is rejected ('low-uniqueness') — near copies are never published.
+ * Every source sentence goes through Spinner::rewrite() (sentence-level transformation + synonyms); the
+ * best of REWRITE_TRIES seeded rewrites is used and a sentence is dropped when too little of it changed.
+ * Never used: quoted speech without quotation marks (first person), fragments of a longer quotation,
+ * teasers ("İşte tüm detaylar…") and page boilerplate. Short neighbouring sentences are sometimes joined.
+ *
+ * Uniqueness = share of word 3-shingles of the post that do not occur in any source. Below
+ * spinner.min_change_ratio extra passes are applied; if it is still too low the result is rejected
+ * ('low-uniqueness') — near copies are never published. The headline must stay below
+ * TITLE_MAX_SIMILARITY to every title of the story (see title()).
  */
 final class ArticleComposer
 {
+    /** A headline clause after "…sözler:", "…itirafı:", "…mesajı:" is reported speech (kept verbatim, never mixed). */
+    private const SPEECH_NOUN = '/(?:^|\s)(?:sert |ağır |çarpıcı |net |flaş )?(?:söz(?:ler|leri|ü)?|itiraf[ıi]?|açıklama(?:sı|lar|ları)?|tepki(?:si|ler|leri)?|gönderme(?:si)?|yanıt(?:ı)?|cevab[ıi]|cevap|çıkış(?:ı)?|mesaj(?:ı|lar|ları)?|eleştiri(?:si|ler|leri)?|iddia(?:sı|lar|ları)?|uyarı(?:sı)?|sitem(?:i)?|övgü(?:sü|ler)?|yorum(?:u|lar|ları)?|ifade(?:ler|leri)|paylaşım(?:ı)?|çağrı(?:sı)?|müjde(?:si)?|tavsiye(?:si)?)$/u';
+
+    /** Headline boilerplate that is never generated ("Bütün ayrıntılar haberimizde", "İşte detaylar" …). */
+    private const BOILERPLATE = '/(?:ayrıntılar|detaylar)\s+(?:haberimizde|haberde|burada)|(?:^|[:,!]\s*)işte\s+(?:ayrıntılar|detaylar|tüm|bütün)|tüm ayrıntılar|bütün ayrıntılar|^(?:gündem|futbol gündemi|spor gündemi|dikkat çeken gelişme|yeni gelişme|son dakika)\s*:|hakkında (?:konuşulan|merak edilen) gelişme|gözler .* üzerinde:|(?:yine|bir kez daha) gündemde:/u';
+
+    /** Words that only look like first-person verbs. */
+    private const NOT_FIRST_PERSON = ['artık', 'mantık', 'taktik', 'plastik', 'kritik', 'politik', 'pratik', 'estetik', 'otantik', 'romantik',
+        'fantastik', 'elektrik', 'istatistik', 'akrobatik', 'matematik', 'atletik', 'yardım', 'kadim', 'nadim', 'bölüm', 'ölçüm', 'üretim',
+        'iletişim', 'yönetim', 'eğitim', 'gelişim', 'değişim', 'kesim', 'seçim', 'biçim', 'görüşüm', 'tutum', 'durum', 'sonuç', 'yorum',
+        'organizasyonum', 'program', 'problem', 'sistem', 'tatum', 'ritim', 'kazım', 'yazım', 'dağılım', 'kuşak', 'atılım', 'alım', 'satım',
+        'yatırım', 'katılım', 'sınırım', 'mesajım', 'takım', 'akım', 'adım', 'kişisel', 'oyuncum', 'çağım', 'ağım', 'dönem', 'kadem',
+        'itibarıyla', 'anlamıyla', 'yıldızım', 'teşvik', 'tahkik', 'tetkik', 'tedbirim', 'mendik', 'gerdik', 'çabuk', 'kayık', 'bıçak',
+        'bütçem', 'erkek', 'ördek', 'kömür', 'yüksek', 'gönüllük', 'lüks', 'tekrarım', 'evrim', 'devrim', 'zirve', 'özetim', 'taktiği',
+        'teknik', 'kimyam', 'ekim', 'makam', 'akşam', 'bayram', 'haram', 'kıyam', 'merhum', 'malum', 'mazlum', 'ilham', 'hesap', 'şampiyonluk'];
+
+    /** A headline must stay below this word-set similarity (Str::similarity) to EVERY title of the story. */
+    public const TITLE_MAX_SIMILARITY = 0.6;
+
+    /** The first source sentence is used only when at least this share of its 3-shingles changed. */
+    private const LEAD_MIN_CHANGE = 0.2;
+
+    /** Seeded rewrites tried per source sentence (the most changed one is used). */
+    private const REWRITE_TRIES = 4;
+
     /** Candidate pool sizes (words) taken from the lead source / per secondary source. */
     private const LEAD_POOL_WORDS = 420;
     private const SECONDARY_POOL_WORDS = 220;
@@ -35,9 +66,9 @@ final class ArticleComposer
      * Later passes rewrite harder and use less (but better rewritten) source text.
      */
     private const PASSES = [
-        ['rate' => 0.85, 'lead' => 170, 'secondary' => 70, 'min_change' => 0.2, 'context' => 2, 'outros' => 1],
-        ['rate' => 1.0, 'lead' => 150, 'secondary' => 60, 'min_change' => 0.25, 'context' => 2, 'outros' => 2],
-        ['rate' => 1.0, 'lead' => 125, 'secondary' => 55, 'min_change' => 0.34, 'context' => 3, 'outros' => 2],
+        ['rate' => 0.9, 'structure' => 0.8, 'lead' => 190, 'secondary' => 80, 'min_change' => 0.33, 'context' => 1, 'outros' => 1],
+        ['rate' => 1.0, 'structure' => 0.9, 'lead' => 170, 'secondary' => 70, 'min_change' => 0.37, 'context' => 2, 'outros' => 1],
+        ['rate' => 1.0, 'structure' => 1.0, 'lead' => 150, 'secondary' => 60, 'min_change' => 0.42, 'context' => 2, 'outros' => 2],
     ];
 
     /** Sentence openers that refer back to context we may not have (skipped for secondary sources). */
@@ -196,7 +227,12 @@ final class ArticleComposer
             }
             $otherTitles[] = $t;
         }
-        $title = $this->title((string) $sources[0]['item']['title'], $titles, $seed, array_values(array_unique($otherTitles)));
+        // The rewritten first sentence may serve as a last-resort headline only when it is well rewritten.
+        $leadSentence = (string) (Spinner::sentences($best['lead_text'])[0] ?? '');
+        if ($leadSentence !== '' && Spinner::uniquenessReport($leadSentence, $sourceTexts)['union'] < 0.5) {
+            $leadSentence = '';
+        }
+        $title = $this->title((string) $sources[0]['item']['title'], $titles, $seed, array_values(array_unique($otherTitles)), $leadSentence, implode("\n", $sourceTexts));
         if ($title === null) {
             return ['ok' => false, 'reason' => 'title-too-similar'];
         }
@@ -268,6 +304,33 @@ final class ArticleComposer
         $sp = $this->spinner;
         $blocks = [];
         $vars = ['player' => 'Cristiano Ronaldo'] + $context;
+        // Sentence-level transformations + synonyms; a capitalised word may only be lowercased after it
+        // moved when the sources also write it in lowercase.
+        $options = ['structure' => $cfg['structure'], 'common' => $lexicon['common'] ?? []];
+        // Best of several seeded rewrites: the one that changes the most of the sentence's word 3-shingles;
+        // a split that leaves one part (nearly) unchanged counts less.
+        $rewrite = static function (string $sentence, string $key) use ($sp, $cfg, $options): string {
+            $best = '';
+            $bestScore = -1.0;
+            for ($try = 0; $try < self::REWRITE_TRIES; $try++) {
+                $text = $sp->rewrite($sentence, $key . '|' . $try, $cfg['rate'], $options)['text'];
+                $score = self::change($text, $sentence);
+                $parts = Spinner::sentences($text);
+                if (count($parts) > 1) {
+                    foreach ($parts as $part) {
+                        if (self::change($part, $sentence) < 0.15) {
+                            $score -= 0.2;
+                            break;
+                        }
+                    }
+                }
+                if ($score > $bestScore + 0.001) {
+                    $best = $text;
+                    $bestScore = $score;
+                }
+            }
+            return $best;
+        };
 
         $blocks[] = ['type' => 'p', 'text' => $sp->expand((string) $sp->pick($sp->templates('intros') ?: ['{{player}} ile ilgili yeni bir gelişme yaşandı.'], $seed . '|intro|' . $pass), $vars, $seed . '|intro')];
 
@@ -279,15 +342,31 @@ final class ArticleComposer
         $k = 0;
         $previousKept = true;
         $paragraph = [];
-        $flush = static function () use (&$paragraph, &$blocks, &$leadText): void {
+        $paragraphFirst = '';
+        $leadBlocks = [];
+        $common = $lexicon['common'] ?? [];
+        $flush = function () use (&$paragraph, &$leadBlocks, &$leadText, &$paragraphFirst, $sp, $seed, $pass, $common): void {
             if ($paragraph === []) {
                 return;
             }
-            $text = implode(' ', $paragraph);
+            // Join two short neighbouring sentences with "ve" now and then (seeded).
+            $joined = [];
+            foreach ($paragraph as $i => $sentence) {
+                $last = array_key_last($joined);
+                if ($last !== null && $sp->pick([true, false], $seed . '|merge|' . $pass . '|' . count($leadBlocks) . '|' . $i)) {
+                    $merged = $sp->merge($joined[$last], $sentence, $common);
+                    if ($merged !== null) {
+                        $joined[$last] = $merged;
+                        continue;
+                    }
+                }
+                $joined[] = $sentence;
+            }
+            $text = implode(' ', $joined);
             if ($leadText === '') {
                 $leadText = $text;
             }
-            $blocks[] = ['type' => 'p', 'text' => $text];
+            $leadBlocks[] = ['type' => 'p', 'text' => $text, 'first' => $paragraphFirst];
             $paragraph = [];
         };
         foreach ($leadParagraphs as $sentences) {
@@ -297,17 +376,25 @@ final class ArticleComposer
                 $keep = $index === 0;
                 $spun = '';
                 if (!$keep && $words + $count <= $cfg['lead'] && ($previousKept || preg_match(self::ANAPHORIC, $sentence) !== 1)) {
-                    $spun = $sp->spin($sentence, $seed . '|' . $pass . '|' . $index, $cfg['rate']);
+                    $spun = $rewrite($sentence, $seed . '|' . $pass . '|' . $index);
                     $quote = self::hasQuote($sentence);
-                    $keep = self::change($spun, $sentence) >= $cfg['min_change'] || ($quote && $quotes === 0);
+                    // One quotation per post may stay (verbatim) even when little else changed — but its
+                    // attribution must be rewritten (a bare quotation is never copied).
+                    $change = self::change($spun, $sentence);
+                    $keep = $change >= $cfg['min_change'] || ($quote && $quotes === 0 && $change >= 0.15);
                 } elseif ($keep) {
-                    $spun = $sp->spin($sentence, $seed . '|' . $pass . '|' . $index, $cfg['rate']);
+                    // The key-fact sentence leads the post, but never (nearly) verbatim.
+                    $spun = $rewrite($sentence, $seed . '|' . $pass . '|' . $index);
+                    $keep = self::change($spun, $sentence) >= self::LEAD_MIN_CHANGE;
                 }
                 $previousKept = $keep;
                 if (!$keep) {
                     continue;
                 }
                 $quotes += self::hasQuote($sentence) ? 1 : 0;
+                if ($paragraph === []) {
+                    $paragraphFirst = $sentence;
+                }
                 $paragraph[] = $spun;
                 $words += $count;
                 if (count($paragraph) >= 3) {
@@ -323,6 +410,7 @@ final class ArticleComposer
         // Other outlets: non-redundant, well rewritten sentences behind a neutral connector.
         $connectors = $sp->shuffle($sp->templates('connectors') ?: ['Öte yandan,'], $seed . '|conn');
         $used = [];
+        $secondaryBlocks = [];
         // A short lead leaves its unused word budget to the other outlets (max 120 words each).
         $secondaryBudget = $secondary === [] ? 0 : min(120, $cfg['secondary'] + intdiv(max(0, $cfg['lead'] - $words), count($secondary)));
         foreach ($secondary as $i => $group) {
@@ -333,7 +421,7 @@ final class ArticleComposer
                 if ($groupWords + $count > $secondaryBudget) {
                     continue;
                 }
-                $spun = $sp->spin($sentence, $seed . '|' . $pass . '|s' . $i . '|' . $j, $cfg['rate']);
+                $spun = $rewrite($sentence, $seed . '|' . $pass . '|s' . $i . '|' . $j);
                 if (self::change($spun, $sentence) < $cfg['min_change'] || (self::hasQuote($sentence) && $quotes > 0)) {
                     continue;
                 }
@@ -345,8 +433,30 @@ final class ArticleComposer
                 continue;
             }
             $kept[0] = $this->withConnector((string) ($connectors[count($used) % max(1, count($connectors))] ?? ''), $kept[0], $lexicon);
-            $blocks[] = ['type' => 'p', 'text' => implode(' ', $kept)];
+            $secondaryBlocks[] = ['type' => 'p', 'text' => implode(' ', $kept)];
             $used[] = (int) $group['source'];
+        }
+        // Mix the outlets: a paragraph of another outlet may follow any lead paragraph after the first
+        // one, unless the next lead paragraph refers back to the previous one ("Bu karar …").
+        $slots = [];
+        foreach ($leadBlocks as $i => $block) {
+            $next = (string) ($leadBlocks[$i + 1]['first'] ?? '');
+            // "Bu karar …" or "… cezanın bu iki karşılaşmayı …": the paragraph refers back to the previous one.
+            $refersBack = preg_match(self::ANAPHORIC, $next) === 1 || preg_match('/(?<![\p{L}])(?:bu|şu|söz konusu|aynı|sözkonusu)\s/iu', mb_substr($next, 0, 90)) === 1;
+            if ($i >= 1 && isset($leadBlocks[$i + 1]) && !$refersBack) {
+                $slots[] = $i;
+            }
+        }
+        $interleave = $slots !== [] && $secondaryBlocks !== [] && (bool) $sp->pick([true, true, false], $seed . '|mix|' . $pass);
+        foreach ($leadBlocks as $i => $block) {
+            unset($block['first']);
+            $blocks[] = $block;
+            if ($interleave && in_array($i, $slots, true) && $secondaryBlocks !== []) {
+                $blocks[] = array_shift($secondaryBlocks);
+            }
+        }
+        foreach ($secondaryBlocks as $block) {
+            $blocks[] = $block;
         }
 
         if ($background !== null) {
@@ -457,7 +567,7 @@ final class ArticleComposer
                 if (!self::usableSentence($sentence) || self::words($sentence) < 8 || preg_match(self::ANAPHORIC, $sentence) === 1) {
                     continue;
                 }
-                if (self::isRedundant($sentence, [...$selected, ...$out])) {
+                if (self::isRedundant($sentence, [...$selected, ...$out]) || self::conflictsWith($sentence, $selected)) {
                     continue;
                 }
                 $count = self::words($sentence);
@@ -477,15 +587,54 @@ final class ArticleComposer
     private static function usableSentence(string $sentence): bool
     {
         $words = self::words($sentence);
-        if ($words < 5 || $words > 70 || preg_match('#https?://|www\.|@\w+|tıkla|abone|reklam|instagram\.com#iu', $sentence) === 1) {
+        if ($words < 5 || $words > 70 || preg_match('#https?://|www\.|@\w+|tıkla|abone|reklam|instagram\.com|kaynaklar arasına ekle|tercih edilen kaynak|haberlerimizin daha fazlası|bizi takip edin|iktibas edilemez|telif hakk|tüm hakları saklı#iu', $sentence) === 1) {
             return false;
         }
         if (ArticleExtractor::isKeywordList($sentence)) {
             return false;
         }
+        // Teasers of the source page ("İşte tüm detaylar...", "Tüm merak edilenler haberimizin devamında").
+        if (preg_match('/^(?:işte\b.*(?:detay|ayrıntı)|.*(?:haberimizin devamında|haberin devamında|detaylar haberimizde|ayrıntılar haberimizde))/iu', Str::lower($sentence)) === 1) {
+            return false;
+        }
+        // Part of a longer quotation (unbalanced quotation marks) or quoted speech without quotation marks
+        // (first person, "…yaptık", "bana göre"): it must not be rewritten, and is not used at all.
+        if (!self::balancedQuotes($sentence) || self::firstPerson($sentence)) {
+            return false;
+        }
         // Must end like a sentence.
         return preg_match('/[.!?…"”’»)]$/u', $sentence) === 1;
     }
+
+    /** Opening and closing quotation marks pair up (apostrophes followed by a letter are suffixes). */
+    private static function balancedQuotes(string $text): bool
+    {
+        if (substr_count($text, '“') !== substr_count($text, '”') || substr_count($text, '«') !== substr_count($text, '»') || substr_count($text, '"') % 2 === 1) {
+            return false;
+        }
+        $open = preg_match_all('/(?<![\p{L}\p{N}])[‘\'](?=\p{L}|\s?\p{Lu}|\')/u', $text);
+        $close = preg_match_all('/(?<=[\p{L}.!?…,\'])[’\'](?![\p{L}\'])/u', $text);
+        return $open === $close;
+    }
+
+    /** First-person speech outside quotation marks ("…yaptık", "attığım", "bana göre", "eminim"). */
+    public static function firstPerson(string $text): bool
+    {
+        $plain = Str::lower((string) preg_replace('/“[^”]*”|"[^"]*"|«[^»]*»|\'\'[^\']*\'\'|(?<![\p{L}\p{N}])[‘\'](?:[^\'’]|[\'’](?=\p{L}))*[’\'](?![\p{L}])/u', ' ', $text));
+        if (preg_match('/(?<![\p{L}])(?:ben|biz|bana|beni|benim|bende|benden|bize|bizi|bizim|bizde|bizden|kendim|kendimi|kendime|kendimden)(?![\p{L}])/u', $plain) === 1) {
+            return true;
+        }
+        foreach (preg_split('/[^\p{L}]+/u', $plain, -1, PREG_SPLIT_NO_EMPTY) ?: [] as $word) {
+            if (mb_strlen($word) < 5 || in_array($word, self::NOT_FIRST_PERSON, true)) {
+                continue;
+            }
+            if (preg_match('/(?:[ıiuü]yor(?:um|uz|dum|duk)|[dt][ıiuü](?:m|k)|[ae]c[ae]ğ[ıi](?:m|z)|m[ıiuü]ş(?:ım|im|um|üm|ız|iz|uz|üz)|m[ae]l[ıi]y[ıi](?:m|z)|[ae]bil[ıi]r[ıi](?:m|z)|ğ[ıiuü]m(?:[ıiuü]z)?|[ae]r[ıi]m|[ıiuü]r[ıiuü]m|[ae]m[ae]m|y[ıiuü]m|s[ae]m)$/u', $word) === 1) {
+                return true;
+            }
+        }
+        return false;
+    }
+
 
     /** Same information as an already selected sentence? */
     private static function isRedundant(string $sentence, array $selected): bool
@@ -502,6 +651,34 @@ final class ArticleComposer
             $a = Spinner::shingles($sentence);
             $b = Spinner::shingles($other);
             if ($a !== [] && count(array_intersect_key($a, $b)) / count($a) >= 0.5) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /**
+     * Same amount with a different multiplier in another outlet's text ("255 euro" vs "255 bin euro"): one of
+     * the outlets is wrong, so the other outlet's sentence is not mixed in.
+     */
+    private static function conflictsWith(string $sentence, array $selected): bool
+    {
+        $amounts = static function (string $text): array {
+            $out = [];
+            if (preg_match_all('/(\d+(?:[.,]\d+)?)\s+(bin\s+|milyon\s+|milyar\s+)?(euro|avro|dolar|sterlin|lira|tl|riyal|pound)/iu', Str::lower($text), $m, PREG_SET_ORDER) > 0) {
+                foreach ($m as $hit) {
+                    $out[$hit[1] . '|' . str_replace('avro', 'euro', $hit[3])][trim($hit[2])] = true;
+                }
+            }
+            return $out;
+        };
+        $mine = $amounts($sentence);
+        if ($mine === []) {
+            return false;
+        }
+        $theirs = $amounts(implode(' ', $selected));
+        foreach ($mine as $key => $multipliers) {
+            if (isset($theirs[$key]) && array_diff_key($multipliers, $theirs[$key]) !== []) {
                 return true;
             }
         }
@@ -677,122 +854,117 @@ final class ArticleComposer
     // ------------------------------------------------------------------ title / summary / body
 
     /**
-     * Spun title that differs from every source title (Str::similarity < 0.7).
+     * Headline that differs from every title of the story (Str::similarity < 0.6, at most 0.7 as a last
+     * resort) without boilerplate tails: structural variants of the lead headline (clause order swapped,
+     * "X'dan Y'ye" order swapped, his clause + an information clause of another outlet's headline), each
+     * spun with synonyms, optionally behind a permanent epithet frame ("Portekizli yıldız Ronaldo'dan …").
+     * Nothing is invented: every candidate is made of the source headlines' own material.
      *
-     * @param list<string> $sourceTitles
+     * @param list<string> $sourceTitles every title of the story (incl. evidence-only items)
      * @return array{title: string, meta_title: string}|null
      */
-    public function title(string $base, array $sourceTitles, string $seed, array $otherTitles = []): ?array
+    public function title(string $base, array $sourceTitles, string $seed, array $otherTitles = [], string $lead = '', string $support = ''): ?array
     {
         $base = $this->cleanTitle($base);
         if ($base === '') {
             return null;
         }
         $sp = $this->spinner;
+        $compare = [$base];
+        foreach ($sourceTitles as $t) {
+            $compare[] = (string) $t;
+            $compare[] = $this->cleanTitle((string) $t);
+        }
+        $compare = array_values(array_unique(array_filter($compare, static fn (string $t): bool => trim($t) !== '')));
+        $mentionsHim = RelevanceFilter::mentions($base);
 
-        // Cores: spun full title, spun clauses, and "his clause: clause of another outlet's title".
-        $cores = [];
-        for ($k = 0; $k < 6; $k++) {
-            $cores[] = ['text' => $sp->spin($base, $seed . '|title|' . $k, 1.0), 'bonus' => 0.0];
+        // 1. structures (before synonyms). Reported speech after "…sözler:" is kept verbatim as a tail.
+        $tail = '';
+        $head = $base;
+        if (preg_match('/^(.+?):\s+(.+)$/u', $base, $hm) === 1 && preg_match(self::SPEECH_NOUN, Str::lower(trim($hm[1]))) === 1 && !self::hasQuote($hm[2])) {
+            $head = trim($hm[1]);
+            $tail = ': ' . $hm[2];
         }
-        $ownClauses = self::titleClauses($base);
-        foreach ($ownClauses as $ci => $clause) {
-            if ((count($ownClauses) > 1 || $clause !== $base) && self::words($clause) >= 3) {
-                $cores[] = ['text' => $sp->spin($clause, $seed . '|clause|' . $ci, 1.0), 'bonus' => RelevanceFilter::mentions($clause) ? 0.0 : -0.6];
+        $structures = [['text' => $head, 'penalty' => 0.0, 'tail' => $tail]];
+        if ($tail === '') {
+            foreach (self::clauseSwaps($base) as $t) {
+                $structures[] = ['text' => $t, 'penalty' => 0.15];
             }
+        } else {
+            $structures[] = ['text' => $head, 'penalty' => 0.3]; // the speech dropped
         }
-        $mixClauses = [];
-        foreach ($otherTitles as $other) {
-            foreach (self::titleClauses($this->cleanTitle((string) $other)) as $clause) {
-                if (self::words($clause) >= 3 && !RelevanceFilter::mentions($clause)) {
-                    $mixClauses[] = $clause;
-                }
-            }
+        $swapped = self::caseSwap($head);
+        if ($swapped !== null) {
+            $structures[] = ['text' => $swapped, 'penalty' => 0.1, 'tail' => $tail];
         }
-        foreach ([$base, ...$ownClauses] as $ri => $his) {
-            if (!RelevanceFilter::mentions($his) || self::words($his) > 9) {
-                continue;
-            }
-            foreach (array_slice(array_values(array_unique($mixClauses)), 0, 8) as $mi => $info) {
-                if (Str::similarity($his, $info) >= 0.3) {
+        foreach ($this->titleMixes($base, $otherTitles) as $t) {
+            $structures[] = ['text' => $t, 'penalty' => -0.2]; // two outlets' information in one headline
+        }
+        // Another outlet's headline of the same story — only when the texts we publish carry its facts
+        // (a story cluster can contain an item about a neighbouring story).
+        if ($support !== '') {
+            $supportStems = self::contentStems($support);
+            $alternates = 0;
+            foreach ($sourceTitles as $other) {
+                $other = $this->cleanTitle((string) $other);
+                if ($other === '' || $other === $base || mb_strlen($other) > 110 || self::words($other) > 16 || Str::similarity($other, $base) >= 0.9 || ($mentionsHim && !RelevanceFilter::mentions($other))
+                    || self::hasQuote($other) || preg_match(self::BOILERPLATE, Str::lower($other)) === 1) {
                     continue;
                 }
-                $cores[] = ['text' => rtrim($sp->spin($his, $seed . '|mix|' . $ri, 1.0), '!.…') . ': ' . Spinner::ucfirst(rtrim($sp->spin($info, $seed . '|mixinfo|' . $mi, 1.0), '.…')), 'bonus' => 0.4];
+                $stems = self::contentStems($other);
+                if ($stems === [] || count(array_intersect_key($stems, $supportStems)) / count($stems) < 0.75) {
+                    continue;
+                }
+                $structures[] = ['text' => $other, 'penalty' => 0.25];
+                if (++$alternates >= 8) {
+                    break;
+                }
+            }
+        }
+        // One clause of a two-part headline ("Ricardo Quaresma'dan Cristiano Ronaldo'ya gönderme"); a quotation
+        // is never kept without its quotation marks.
+        $clauses = self::headlineParts($base);
+        if (count($clauses) > 1) {
+            foreach ($clauses as $clause) {
+                // The kept clause must say who/what it is about (a name), not only "Canlı izleme seçenekleri".
+                $named = preg_match('/(?<!^)(?<![.!?:]\s)\b\p{Lu}/u', $clause['text']) === 1 || $this->spinner->startsWithProtected($clause['text']);
+                if (!$clause['quoted'] && $named && self::words($clause['text']) >= 3 && (!$mentionsHim || RelevanceFilter::mentions($clause['text']))) {
+                    $structures[] = ['text' => $clause['text'], 'penalty' => 0.3];
+                }
+            }
+        }
+        // His short or full name ("Ronaldo" <-> "Cristiano Ronaldo"): same person, different headline tokens.
+        foreach ($structures as $structure) {
+            $text = $structure['text'];
+            $alt = preg_match('/^Cristiano Ronaldo(?![\p{L}])/u', $text) === 1 ? (string) preg_replace('/^Cristiano Ronaldo/u', 'Ronaldo', $text)
+                : (preg_match('/^Ronaldo(?![\p{L}])/u', $text) === 1 ? 'Cristiano ' . $text : null);
+            if ($alt !== null) {
+                $structures[] = ['text' => $alt, 'penalty' => $structure['penalty'] + 0.05, 'tail' => $structure['tail'] ?? ''];
             }
         }
 
-        $patterns = $sp->templates('title_patterns') ?: ['{{subject}} {{rest}}'];
+        // 2. synonyms (several seeds) and epithet frames
         $candidates = [];
-        $add = function (string $candidate, float $bonus, int $coreWords) use (&$candidates, $sourceTitles, $seed): void {
-            $length = mb_strlen($candidate);
-            if ($length < 25 || $length > 110 || isset($candidates[$candidate]) || substr_count($candidate, ':') > 1) {
-                return;
+        foreach ($structures as $si => $structure) {
+            $variants = [$structure['text']];
+            for ($k = 0; $k < 6; $k++) {
+                $variants[] = self::tidy($sp->spin($structure['text'], $seed . '|title|' . $si . '|' . $k, 1.0));
             }
-            $similarity = 0.0;
-            foreach ($sourceTitles as $sourceTitle) {
-                $similarity = max($similarity, Str::similarity($candidate, $sourceTitle));
-            }
-            if ($similarity >= 0.7) {
-                return;
-            }
-            $score = (RelevanceFilter::mentions($candidate) ? 2.0 : 0.0)
-                + ($length >= 40 && $length <= 90 ? 1.0 : 0.0)
-                + ($similarity < 0.6 ? 0.4 : 0.0)
-                + ($similarity > 0.15 ? 0.5 : 0.0)      // keep the story recognisable
-                + min(1.5, $coreWords / 8)              // keep the information of the headline
-                + $bonus
-                + (crc32($seed . $candidate) % 1000) / 2500;
-            $candidates[$candidate] = ['title' => $candidate, 'score' => $score, 'length' => $length];
-        };
-        $prefixes = [];
-        $suffixes = [];
-        foreach ($cores as $vi => $core) {
-            $variant = trim((string) preg_replace('/\s+/u', ' ', $core['text']));
-            $coreWords = self::words($variant);
-            $split = $this->subjectSplit($variant);
-            $mentionsAtStart = $split !== null || preg_match('/^(?:Cristiano Ronaldo|Ronaldo|CR7)/u', $variant) === 1;
-            foreach ($patterns as $pi => $pattern) {
-                $expanded = $sp->expand(str_replace(['{{subject}}', '{{rest}}'], ["\u{E010}", "\u{E011}"], $pattern), [], $seed . '|tp|' . $vi . '|' . $pi);
-                $plain = trim($expanded) === "\u{E010} \u{E011}";
-                $candidate = $this->applyPattern($expanded, $variant, $split);
-                if ($candidate !== null) {
-                    $add($candidate, $core['bonus'] + ($plain ? 0.6 : ($split !== null && !str_contains($expanded, "\u{E010} \u{E011}") ? 0.3 : 0.0)), $coreWords);
-                } elseif (!$mentionsAtStart && preg_match("/\u{E010}[^\u{E011}]*\\p{L}[^\u{E011}]*:\\s*\u{E011}/u", $expanded) === 1) {
-                    // Only "Ronaldo gündemde: …", "Ronaldo cephesinde …: …" — never "Ronaldo: …" (reads as his quote).
-                    // Headline about him that does not start with his name: "Ronaldo gündemde: …".
-                    $candidate = $this->applyPattern($expanded, $variant, ['Cristiano Ronaldo', $variant]);
-                    if ($candidate !== null) {
-                        $add($candidate, $core['bonus'] - 0.2, $coreWords);
-                    }
-                }
-                if (str_contains($expanded, "\u{E010} \u{E011}")) {
-                    [$before, $after] = explode("\u{E010} \u{E011}", $expanded, 2);
-                    if (trim($before) !== '') {
-                        $prefixes[trim($before)] = true;
-                    }
-                    if (trim($after) !== '') {
-                        $suffixes[trim($after)] = true;
-                    }
+            $tailText = (string) ($structure['tail'] ?? '');
+            foreach (array_values(array_unique($variants)) as $vi => $variant) {
+                $this->addTitle($candidates, $variant . $tailText, $structure['penalty'], $base, $compare, $mentionsHim, $seed);
+                foreach ($this->framed($variant, $seed . '|frame|' . $si . '|' . $vi) as $framed) {
+                    // The first frames ("Portekizli yıldız …") read most naturally.
+                    $this->addTitle($candidates, $framed['text'] . $tailText, $structure['penalty'] + 0.35 + 0.03 * $framed['rank'], $base, $compare, $mentionsHim, $seed);
                 }
             }
         }
-        if ($candidates === []) {
-            // Last resort: decoration before and after the headline.
-            foreach ($cores as $core) {
-                $variant = rtrim(trim($core['text']), '!.…');
-                if (str_contains($variant, ':') || str_ends_with($variant, '?')) {
-                    continue;
-                }
-                foreach (array_keys($prefixes) as $prefix) {
-                    foreach (array_keys($suffixes) as $suffix) {
-                        if (str_contains($prefix, ':') && str_contains($suffix, ':')) {
-                            continue;
-                        }
-                        $add(self::tidy($prefix . ' ' . Spinner::ucfirst($variant) . $suffix), $core['bonus'] - 0.5, self::words($variant));
-                    }
-                }
-            }
+        // Last resort: the rewritten first sentence of the post (accurate, never boilerplate) when it is short.
+        $lead = rtrim(trim($lead), '.');
+        if ($lead !== '' && mb_strlen($lead) <= 110 && !self::hasQuote($lead)) {
+            $this->addTitle($candidates, $lead, 0.8, $base, $compare, $mentionsHim, $seed);
         }
+        $candidates = array_filter($candidates, static fn (array $c): bool => $c['similarity'] < self::TITLE_MAX_SIMILARITY);
         if ($candidates === []) {
             return null;
         }
@@ -801,31 +973,183 @@ final class ArticleComposer
         // <title>: the headline itself when it is short enough (Google shows ~60–65 chars), else the best short candidate.
         $meta = $best['length'] <= 65 ? $best['title'] : null;
         foreach ($candidates as $c) {
-            if ($meta === null && $c['length'] <= 60 && RelevanceFilter::mentions($c['title'])) {
+            if ($meta === null && $c['length'] <= 60 && $c['similarity'] < 0.7 && RelevanceFilter::mentions($c['title'])) {
                 $meta = $c['title'];
             }
         }
         return ['title' => $best['title'], 'meta_title' => $meta ?? $best['title']];
     }
 
+    /** Score one headline candidate (or drop it). */
+    private function addTitle(array &$candidates, string $title, float $penalty, string $base, array $compare, bool $mentionsHim, string $seed): void
+    {
+        $title = self::tidy($title);
+        $length = mb_strlen($title);
+        if ($length < 25 || $length > 110 || isset($candidates[$title]) || substr_count($title, ':') > 1 || preg_match('/[:,;\-–]$/u', $title) === 1) {
+            return;
+        }
+        if (preg_match(self::BOILERPLATE, Str::lower($title)) === 1 || substr_count($title, '"') % 2 === 1 || substr_count($title, '“') !== substr_count($title, '”')) {
+            return;
+        }
+        if ($mentionsHim && !RelevanceFilter::mentions($title)) {
+            return;
+        }
+        $similarity = 0.0;
+        foreach ($compare as $other) {
+            $similarity = max($similarity, Str::similarity($title, $other));
+        }
+        if ($similarity >= 0.7) {
+            return;
+        }
+        $baseWords = max(1, self::words($base));
+        $score = ($similarity < 0.6 ? 3.0 : 0.0)
+            + min(0.6, (0.6 - $similarity) * 1.5)
+            + ($length >= 40 && $length <= 70 ? 1.2 : ($length <= 80 ? 0.4 : -0.8))
+            + min(1.0, self::words($title) / $baseWords)          // keep the information of the headline
+            + (preg_match('/^(?:Cristiano Ronaldo|Ronaldo|CR7)/u', $title) === 1 ? 0.2 : 0.0)
+            - $penalty
+            + (crc32($seed . $title) % 1000) / 5000;
+        $candidates[$title] = ['title' => $title, 'score' => $score, 'length' => $length, 'similarity' => $similarity];
+    }
+
     /**
-     * Headline clauses: split at "! ", "? ", ": ", " | ", " - ", "..." with leading/trailing quotes removed.
+     * "A! B" / "A: B" / "A? B" with two clauses => "B: A" (or "B? A?" for two questions).
      *
      * @return list<string>
      */
-    private static function titleClauses(string $title): array
+    private static function clauseSwaps(string $title): array
     {
+        $parts = self::headlineParts($title);
+        if (count($parts) !== 2) {
+            return [];
+        }
+        [$a, $b] = $parts;
+        if (self::words($a['text']) < 2 || self::words($b['text']) < 2) {
+            return [];
+        }
+        $out = str_ends_with($b['text'], '?') ? $b['text'] . ' ' . $a['text'] : $b['text'] . ': ' . $a['text'];
+        return [rtrim($out, ' :')];
+    }
+
+    /** "Ten Hag'dan Ronaldo'ya sert sözler" <=> "Ronaldo'ya Ten Hag'dan sert sözler". */
+    private static function caseSwap(string $title): ?string
+    {
+        $name = '(?:\p{Lu}[\p{L}\-]*\s){0,2}\p{Lu}[\p{L}\-]*';
+        if (preg_match('/^(' . $name . '[\'’](?:dan|den|tan|ten))\s+(' . $name . '[\'’](?:y?[ae]|n[ae]))\s+(\p{Ll}.+)$/u', $title, $m) === 1
+            || preg_match('/^(' . $name . '[\'’](?:y?[ae]|n[ae]))\s+(' . $name . '[\'’](?:dan|den|tan|ten))\s+(\p{Ll}.+)$/u', $title, $m) === 1) {
+            return $m[2] . ' ' . $m[1] . ' ' . $m[3];
+        }
+        return null;
+    }
+
+    /**
+     * His clause + an information clause of another outlet's headline ("Ronaldo kampı terk etti: 30 gün
+     * men cezası").
+     *
+     * @return list<string>
+     */
+    private function titleMixes(string $base, array $otherTitles): array
+    {
+        $info = [];
+        foreach ($otherTitles as $other) {
+            foreach (self::headlineParts($this->cleanTitle((string) $other)) as $clause) {
+                $text = $clause['text'];
+                $words = self::words($text);
+                if (!$clause['quoted'] && $words >= 3 && $words <= 8 && !RelevanceFilter::mentions($text) && preg_match(self::BOILERPLATE, Str::lower($text)) !== 1
+                    && preg_match('/^(?:işte|tüm|bütün|flaş|video|galeri|o sözler|bu|şu)(?![\p{L}])/iu', Str::lower($text)) !== 1) {
+                    $info[] = self::rtrimPunct($text);
+                }
+            }
+        }
+        $info = array_slice(array_values(array_unique($info)), 0, 6);
+        $own = [['text' => $base, 'quoted' => false], ...self::headlineParts($base)];
         $out = [];
-        foreach (preg_split('/(?<=[!?])\s+|:\s+|\s+\|\s+|\s+[-–]\s+|\.{3}\s*|…\s*/u', $title) ?: [] as $clause) {
-            $clause = trim($clause, " \t.,;:");
-            // A headline that opens with a quote: keep the part after it.
-            $clause = trim((string) preg_replace('/^(?:“[^”]*”|"[^"]*"|\'[^\']*\')\s*:?\s*/u', '', $clause), " \t.,;:");
-            $clause = trim($clause, '"“”\'‘’');
-            if ($clause !== '' && self::words($clause) >= 2) {
-                $out[] = Spinner::ucfirst($clause);
+        foreach ($own as $clause) {
+            $his = self::rtrimPunct($clause['text']);
+            if ($clause['quoted'] || self::hasQuote($his) || !RelevanceFilter::mentions($his) || self::words($his) > 9 || str_contains($his, ':') || str_ends_with($his, '?')) {
+                continue;
+            }
+            foreach ($info as $text) {
+                if (Str::similarity($his, $text) < 0.3) {
+                    $out[] = $his . ': ' . Spinner::ucfirst($text);
+                }
             }
         }
         return array_values(array_unique($out));
+    }
+
+    /**
+     * Clauses of a headline split at ": ", "! ", "? ", " | ", " - ", "…" and at a comma after a finite verb
+     * ("Ronaldo kaç gol oldu, …"): ['text' => clause (a question keeps its "?"), 'quoted' => whole clause is a quotation].
+     *
+     * @return list<array{text: string, quoted: bool}>
+     */
+    private static function headlineParts(string $title): array
+    {
+        $parts = preg_split('/(\s*[:!?|]+\s+|\s*\.{3}\s*|\s*…\s*|\s+[-–]\s+|[!?]+$)/u', trim($title), -1, PREG_SPLIT_DELIM_CAPTURE | PREG_SPLIT_NO_EMPTY) ?: [];
+        $clauses = [];
+        for ($i = 0; $i < count($parts); $i += 2) {
+            $text = trim($parts[$i]);
+            $sep = $parts[$i + 1] ?? '';
+            if ($text === '') {
+                continue;
+            }
+            if (count($parts) <= 2 && preg_match('/^(.{10,}?\p{L}+),\s+(.{10,})$/u', $text, $cm) === 1 && preg_match('/(\p{L}+)$/u', $cm[1], $lw) === 1 && Spinner::isFinite($lw[1])) {
+                $clauses[] = [$cm[1], ''];
+                $clauses[] = [$cm[2], $sep];
+                continue;
+            }
+            $clauses[] = [$text, $sep];
+        }
+        $out = [];
+        $previous = null;
+        foreach ($clauses as [$text, $sep]) {
+            $text = trim($text, " \t.,;:");
+            $quoted = preg_match('/^(?:“[^”]*”|"[^"]*"|\'(?:[^\']|\'(?=\p{L}))*\'(?!\p{L}))$/u', $text) === 1;
+            // "Ronaldo itirafı: Takımı yüzüstü bıraktı" — the second clause is reported speech.
+            $speech = $previous !== null && preg_match(self::SPEECH_NOUN, Str::lower($previous)) === 1;
+            $question = str_contains($sep, '?') || preg_match('/(?:^|\s)(?:kaç|ne|neyi|neden|niçin|niye|nasıl|nerede|nereden|hangi|kim|kimi|kime)(?:\s|$)|\sm[ıiuü](?:[dysn]\p{L}*)?$/u', Str::lower($text)) === 1;
+            if ($text !== '' && self::words($text) >= 2) {
+                $out[] = ['text' => Spinner::ucfirst($text) . ($question && !$quoted ? '?' : ''), 'quoted' => $quoted || $speech];
+            }
+            $previous = $text;
+        }
+        return $out;
+    }
+
+    /**
+     * Epithet frames of the 'title_patterns' templates for a headline that opens with his name:
+     * "Portekizli yıldız Ronaldo'dan …". "{{subject}}, {{rest}}" only for a nominative subject.
+     *
+     * @return list<array{text: string, rank: int}>
+     */
+    private function framed(string $title, string $seed): array
+    {
+        if (preg_match('/^(Cristiano Ronaldo|Ronaldo)((?:[\'’]\p{L}+)?)((?:,\s|\s).+)$/u', $title, $m) !== 1) {
+            return [];
+        }
+        $nominative = $m[2] === '';
+        $comma = str_starts_with($m[3], ',');
+        $rest = trim(ltrim($m[3], ','));
+        $out = [];
+        $patterns = $this->spinner->templates('title_patterns');
+        $order = array_flip($patterns);
+        foreach ($this->spinner->shuffle($patterns, $seed) as $pattern) {
+            if (!str_contains($pattern, '{{subject}}') || !str_contains($pattern, '{{rest}}')) {
+                continue;
+            }
+            $prefix = trim((string) strstr($pattern, '{{subject}}', true));
+            if ($prefix === '' || str_contains($pattern, '{{subject}},')) {
+                continue;
+            }
+            $subject = 'Ronaldo' . $m[2] . ($comma ? ',' : ''); // "Portekizli yıldız Ronaldo'dan": the epithet replaces the first name
+            $text = $this->spinner->expand(str_replace(['{{subject}}', '{{rest}}'], ["\u{E010}", "\u{E011}"], $pattern), [], $seed . '|' . $pattern);
+            $out[] = ['text' => str_replace(["\u{E010}", "\u{E011}"], [$subject, $rest], $text), 'rank' => (int) ($order[$pattern] ?? 0)];
+            if (count($out) >= 4) {
+                break;
+            }
+        }
+        return $out;
     }
 
     /** Remove "SON DAKİKA |", publisher suffixes and shouting from a source title. */
@@ -845,7 +1169,8 @@ final class ArticleComposer
         );
         $title = (string) preg_replace_callback('/(^|[.!?:]\s+)(\p{Ll})/u', static fn (array $m): string => $m[1] . Str::upper($m[2]), $title);
         $title = Spinner::ucfirst($title);
-        return trim($title, " \t-–|");
+        // (trim() is byte-wise: "–" in its list would cut the first bytes of a leading "“")
+        return (string) preg_replace('/^[\s\-–|]+|[\s\-–|]+$/u', '', $title);
     }
 
     /** Lowercased text with protected names (Cristiano Ronaldo, Portekiz Milli Takımı …) capitalised again. */
@@ -859,53 +1184,22 @@ final class ArticleComposer
         return $lower;
     }
 
-    /**
-     * [subject, rest] when the title starts with his name in the nominative ("Ronaldo kampı terk etti")
-     * or with any protected name followed by a comma ("Al-Nassr, …"); a name used as a modifier
-     * ("Portekiz kampını terk eden …") is never split off.
-     */
-    private function subjectSplit(string $title): ?array
+    /** First five letters of the content words (≥ 4 letters, not his name) of a text. */
+    private static function contentStems(string $text): array
     {
-        foreach ($this->spinner->protectedTerms() as $term) {
-            if (!str_starts_with($title, $term)) {
-                continue;
+        $out = [];
+        foreach (explode(' ', Str::normalize($text)) as $word) {
+            if (strlen($word) >= 4 && !in_array($word, ['cristiano', 'ronaldo', 'ronaldonun', 'ronaldoya', 'ronaldodan', 'ronaldoyu', 'icin', 'olarak', 'gibi', 'daha', 'sonra', 'once', 'kadar', 'iste'], true)) {
+                $out[substr($word, 0, 5)] = true;
             }
-            $after = substr($title, strlen($term));
-            $isPlayer = in_array($term, ['Cristiano Ronaldo', 'Ronaldo', 'CR7'], true);
-            if (preg_match('/^(,?)\s+(\p{Ll}.*)$/u', $after, $m) === 1 && self::words($m[2]) >= 2 && ($isPlayer || $m[1] === ',')) {
-                return [$term, trim($m[2])];
-            }
-            return null;
         }
-        return null;
+        return $out;
     }
 
-    private function applyPattern(string $pattern, string $variant, ?array $split): ?string
+    /** Strip trailing "!", "." and "…" (multibyte-safe). */
+    private static function rtrimPunct(string $text): string
     {
-        $variant = trim($variant);
-        $hasColon = str_contains($variant, ':');
-        if (str_contains($pattern, "\u{E010} \u{E011}")) {
-            [$before, $after] = explode("\u{E010} \u{E011}", $pattern, 2);
-            if (($hasColon && (str_contains($before, ':') || str_contains($after, ':'))) || (trim($after) !== '' && preg_match('/[?]$/u', $variant) === 1)) {
-                return null;
-            }
-            $core = trim($after) !== '' ? rtrim($variant, '!.…') : $variant;
-            if (str_ends_with(trim($before), ':')) {
-                $core = Spinner::ucfirst($core);
-            }
-            return self::tidy($before . $core . $after);
-        }
-        if ($split === null || !str_contains($pattern, "\u{E010}") || !str_contains($pattern, "\u{E011}")) {
-            return null;
-        }
-        [$subject, $rest] = $split;
-        if (str_contains($rest, ':') && substr_count($pattern, ':') > 0) {
-            return null;
-        }
-        $restPos = mb_strpos($pattern, "\u{E011}");
-        $beforeRest = rtrim(mb_substr($pattern, 0, (int) $restPos));
-        $rest = str_ends_with($beforeRest, ':') ? Spinner::ucfirst($rest) : $rest;
-        return self::tidy(str_replace(["\u{E010}", "\u{E011}"], [$subject, $rest], $pattern));
+        return (string) preg_replace('/[!.…\s]+$/u', '', $text);
     }
 
     private static function tidy(string $title): string
@@ -994,7 +1288,7 @@ final class ArticleComposer
 
     private static function hasQuote(string $sentence): bool
     {
-        return preg_match('/[“”"«»]/u', $sentence) === 1;
+        return preg_match('/[“”"«»]|(?<![\p{L}\p{N}])[\'‘](?:[^\'’\n]|[\'’](?=\p{L}))+[\'’](?![\p{L}])/u', $sentence) === 1;
     }
 
     private static function words(string $text): int

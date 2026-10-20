@@ -8,6 +8,7 @@ use App\Core\Request;
 use App\Core\Response;
 use App\Core\Seo;
 use App\Services\News\SourceRegistry;
+use App\Services\Shop\Shop;
 use App\Support\Format;
 
 /**
@@ -17,7 +18,7 @@ use App\Support\Format;
 final class PageController
 {
     /** Last editorial revision of each static page (also used as sitemap lastmod). */
-    public const REVISED = ['about' => '2026-10-20', 'privacy' => '2026-10-20', 'contact' => '2026-10-20'];
+    public const REVISED = ['about' => '2026-10-20', 'privacy' => '2026-10-20', 'contact' => '2026-10-20', 'shop-legal' => '2026-10-20'];
 
     public function about(Request $request): Response
     {
@@ -139,16 +140,8 @@ final class PageController
      */
     public static function whatsapp(string $number): ?array
     {
-        $digits = (string) preg_replace('/\D+/', '', $number);
-        if (str_starts_with($digits, '00')) {
-            $digits = substr($digits, 2);
-        }
-        if (strlen($digits) === 11 && str_starts_with($digits, '0')) {
-            $digits = '90' . substr($digits, 1);
-        } elseif (strlen($digits) === 10 && str_starts_with($digits, '5')) {
-            $digits = '90' . $digits;
-        }
-        if (strlen($digits) < 10 || strlen($digits) > 15) {
+        $digits = Shop::normalizeWhatsapp($number); // same number as the shop's "Haber ver" links
+        if ($digits === '') {
             return null;
         }
         $display = '+' . $digits;

@@ -60,7 +60,7 @@ if (!empty($player['shirt_number'])) {
       <div class="hero-actions">
         <a class="btn btn-gold btn-lg" href="<?= e(url('/hayati')) ?>">Hayatını Keşfet</a>
         <a class="btn btn-outline btn-lg" href="<?= e(url('/istatistikler')) ?>">İstatistikler</a>
-        <a class="btn btn-ghost btn-lg home-hero-news" href="<?= e(url('/haberler')) ?>">Son Haberler</a>
+        <a class="link-more home-hero-news" href="<?= e(url('/haberler')) ?>">Son Haberler</a>
       </div>
     </div>
     <?php if ($portrait !== null): ?>

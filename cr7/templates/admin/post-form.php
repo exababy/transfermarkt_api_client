@@ -17,7 +17,8 @@ $isSpun = (int) ($post['is_spun'] ?? 0) === 1;
 $err = static fn (string $name): string => isset($errors[$name]) ? '<p class="form-error" id="' . e($name) . '-error">' . e($errors[$name]) . '</p>' : '';
 $aria = static fn (string $name, string $help = ''): string => (isset($errors[$name]) ? ' aria-invalid="true"' : '')
     . (($ids = trim(($help !== '' ? $help . ' ' : '') . (isset($errors[$name]) ? $name . '-error' : ''))) !== '' ? ' aria-describedby="' . e($ids) . '"' : '');
-$imageUrl = !empty($post['image_path']) ? url((string) $post['image_path']) : null;
+$imageUrl = \App\Repositories\NewsRepository::imageUrl($post['image_path'] ?? null);
+$imageMissing = $imageUrl === null && !empty($post['image_path']);
 $statusLabels = ['pending' => 'Bekliyor', 'failed' => 'Başarısız', 'duplicate' => 'Aynı hikâye', 'skipped' => 'Atlandı', 'published' => 'Yayınlandı'];
 ?>
 <?php if ($errors !== []): ?>
@@ -143,6 +144,8 @@ $statusLabels = ['pending' => 'Bekliyor', 'failed' => 'Başarısız', 'duplicate
       <h2 id="image-title">Paylaşım görseli</h2>
       <?php if ($imageUrl !== null): ?>
       <img class="og-preview" src="<?= e($imageUrl) ?>?v=<?= e(substr(sha1((string) ($post['updated_at'] ?? '')), 0, 8)) ?>" width="1200" height="630" alt="“<?= e($post['title']) ?>” haberinin paylaşım görseli" loading="lazy">
+      <?php elseif ($imageMissing): ?>
+      <p class="notice notice-warning text-sm">Görsel dosyası bulunamadı; sitede yer tutucu gösteriliyor. Kaydettiğinizde görsel yeniden oluşturulur.</p>
       <?php else: ?>
       <p class="muted text-sm">Kaydettiğinizde başlıktan 1200×630 boyutunda bir Open Graph görseli otomatik oluşturulur.</p>
       <?php endif; ?>

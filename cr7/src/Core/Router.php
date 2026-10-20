@@ -50,6 +50,12 @@ final class Router
         $method = $request->method() === 'HEAD' ? 'GET' : $request->method();
         $path = $request->path();
 
+        // No route has a backslash or control character; echoing them into the redirect below would make
+        // "/%5Chost/" or "/%09/host/" an off-site redirect (browsers read "/\host" and "/<TAB>/host" as "//host").
+        if (preg_match('#[\\\\\x00-\x1F\x7F]#', $request->rawPath()) === 1) {
+            return Response::notFound();
+        }
+
         if ($method === 'GET' && $request->rawPath() !== $path) {
             $query = $request->queryString();
             return Response::redirect(App::urlPrefix() . $path . ($query !== '' ? '?' . $query : ''), 301);

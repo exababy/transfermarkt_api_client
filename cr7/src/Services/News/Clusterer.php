@@ -18,6 +18,9 @@ use App\Support\Str;
  *     Jaccard >= 0.4 (and at least 2 shared stems) or overlap >= 0.75 with at least 4 shared stems.
  * The second rule catches the many headline variants Turkish outlets write for one story
  * ("Ronaldo'nun cezası belli oldu" / "Kampı terk eden Ronaldo'ya 255 euro ceza").
+ * Never the same story: titles with different scores or counts (conflictingFacts(): "2-1" vs
+ * "3-0", "950. gol" vs "951. gol"), and items published more than STORY_SPAN_HOURS apart unless
+ * their titles are nearly identical (consecutive match reports look alike).
  *
  * Google News items carry Google's own story cluster (other outlets' titles, one per line in
  * the description), which is used as additional titles of that item.
@@ -34,6 +37,13 @@ final class Clusterer
     /** UTC window in which items/posts are compared. */
     public const WINDOW_HOURS = 72;
 
+    /**
+     * Items published further apart than this are one story only when their titles are nearly
+     * identical: Al-Nassr and Portugal play every 3–4 days and the match headlines look alike.
+     */
+    public const STORY_SPAN_HOURS = 24;
+    private const NEAR_IDENTICAL = 0.8;
+
     public static function threshold(): float
     {
         return (float) Settings::get('news.similarity_threshold', Config::get('news.similarity_threshold', 0.55));
@@ -49,9 +59,12 @@ final class Clusterer
         return sha1(implode('?', $parts));
     }
 
-    /** True when two titles describe the same story. */
+    /** True when two titles describe the same story (never when their scores or counts differ). */
     public static function sameStory(string $a, string $b, ?float $threshold = null): bool
     {
+        if (self::conflictingFacts($a, $b)) {
+            return false;
+        }
         if (Str::similarity($a, $b) >= ($threshold ?? self::threshold())) {
             return true;
         }
@@ -75,7 +88,7 @@ final class Clusterer
     {
         $sa = self::stems(self::head($a));
         $sb = self::stems(self::head($b));
-        if (count($sa) < 8 || count($sb) < 8) {
+        if (count($sa) < 8 || count($sb) < 8 || self::conflictingFacts(self::head($a), self::head($b))) {
             return false;
         }
         $shared = count(array_intersect($sa, $sb));
@@ -85,24 +98,31 @@ final class Clusterer
     /**
      * Matching candidates for an item, best first.
      *
+     * Items published more than STORY_SPAN_HOURS apart (both times known, UTC 'Y-m-d H:i:s')
+     * only match on nearly identical titles: two match reports days apart are two stories.
+     *
      * @param list<string> $titles title + optional related titles (Google story cluster)
-     * @param list<array{id: int, titles: list<string>, text?: string}> $candidates
+     * @param list<array{id: int, titles: list<string>, text?: string, published_at?: ?string}> $candidates
      * @return list<array{id: int, score: float}>
      */
-    public static function matches(array $titles, string $text, array $candidates, ?float $threshold = null): array
+    public static function matches(array $titles, string $text, array $candidates, ?float $threshold = null, ?string $publishedAt = null): array
     {
+        $time = $publishedAt !== null && $publishedAt !== '' ? strtotime($publishedAt . ' UTC') : false;
         $out = [];
         foreach ($candidates as $candidate) {
+            $otherTime = isset($candidate['published_at']) && $candidate['published_at'] !== '' ? strtotime($candidate['published_at'] . ' UTC') : false;
+            $apart = $time !== false && $otherTime !== false && abs($time - $otherTime) > self::STORY_SPAN_HOURS * 3600;
             $best = null;
             foreach ($titles as $title) {
                 foreach ($candidate['titles'] as $other) {
-                    if ($title === '' || $other === '' || !self::sameStory($title, $other, $threshold)) {
+                    if ($title === '' || $other === '' || !self::sameStory($title, $other, $threshold)
+                        || ($apart && Str::similarity($title, $other) < self::NEAR_IDENTICAL)) {
                         continue;
                     }
                     $best = max($best ?? 0.0, self::score($title, $other));
                 }
             }
-            if ($best === null && $text !== '' && ($candidate['text'] ?? '') !== '' && self::sameText($text, (string) $candidate['text'])) {
+            if ($best === null && !$apart && $text !== '' && ($candidate['text'] ?? '') !== '' && self::sameText($text, (string) $candidate['text'])) {
                 $best = 0.5;
             }
             if ($best !== null) {
@@ -139,6 +159,49 @@ final class Clusterer
             return (int) $m[1];
         }
         return null;
+    }
+
+    /**
+     * True when two texts state different facts: different scores ("2-1" vs "3-0"; "2-1" and
+     * "1-2" are the same score told from the other side) or different numbers of the same thing
+     * ("950. golünü" vs "951. golünü"). Numbers of different things ("30 gün men" / "255 euro
+     * ceza") do not conflict.
+     */
+    public static function conflictingFacts(string $a, string $b): bool
+    {
+        $fa = self::facts($a);
+        $fb = self::facts($b);
+        if ($fa['scores'] !== [] && $fb['scores'] !== [] && array_intersect($fa['scores'], $fb['scores']) === []) {
+            return true;
+        }
+        foreach (array_intersect_key($fa['counts'], $fb['counts']) as $unit => $numbers) {
+            if (array_intersect($numbers, $fb['counts'][$unit]) === []) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /** @return array{scores: list<string>, counts: array<string, list<string>>} counts: 4-letter stem of the next word => numbers */
+    private static function facts(string $text): array
+    {
+        $text = (string) preg_replace('/(?<=\d)\.(?=\d{3}(?!\d))/u', '', $text); // 1.000 => 1000
+        $scores = [];
+        if (preg_match_all('/(?<![\p{L}\p{N}.,])(\d{1,2}) ?[-–] ?(\d{1,2})(?![\p{N}])/u', $text, $m, PREG_SET_ORDER) > 0) {
+            foreach ($m as $match) {
+                $scores[] = min((int) $match[1], (int) $match[2]) . '-' . max((int) $match[1], (int) $match[2]);
+            }
+        }
+        $counts = [];
+        if (preg_match_all('/(?<![\p{L}\p{N}.,\-–])(\d+)\.?\s+(\p{L}+)/u', $text, $m, PREG_SET_ORDER) > 0) {
+            foreach ($m as $match) {
+                $unit = substr(Str::normalize($match[2]), 0, 4);
+                if ($unit !== '') {
+                    $counts[$unit][] = (string) (int) $match[1];
+                }
+            }
+        }
+        return ['scores' => array_values(array_unique($scores)), 'counts' => $counts];
     }
 
     /** @return list<string> 4-letter stems of the meaningful title words */

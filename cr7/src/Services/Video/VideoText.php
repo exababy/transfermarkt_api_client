@@ -74,6 +74,13 @@ final class VideoText
         return 'https://i.ytimg.com/vi/' . rawurlencode($youtubeId) . '/' . $size . '.jpg';
     }
 
+    /** [width, height] of an i.ytimg.com thumbnail by its size name (hqdefault 480x360 when unknown). */
+    public static function thumbnailSize(string $url): array
+    {
+        $name = preg_match('#/(maxresdefault|sddefault|hqdefault|mqdefault|default)\.jpg$#', $url, $m) === 1 ? $m[1] : 'hqdefault';
+        return ['maxresdefault' => [1280, 720], 'sddefault' => [640, 480], 'hqdefault' => [480, 360], 'mqdefault' => [320, 180], 'default' => [120, 90]][$name];
+    }
+
     /**
      * Tidy a channel-provided title: decode entities, drop trailing hashtag runs
      * ("… #shorts #alnassr"), unwrap inline hashtags ("#Ronaldo" => "Ronaldo"), collapse whitespace.
@@ -87,8 +94,23 @@ final class VideoText
             $title = $stripped;
         }
         $title = (string) preg_replace('/(?<![\p{L}\p{N}&])#(\p{L}[\p{L}\p{N}_]*)/u', '$1', $title);
-        $title = trim((string) preg_replace('/\s+/u', ' ', $title), " \t\n\r\0\x0B|-–—");
+        // Unicode-aware trim: trim()'s byte list would also strip the bytes of '–'/'—' (0x80, 0x93,
+        // 0x94, 0xE2) from the end of a trailing emoji and leave a broken '?' behind.
+        $title = (string) preg_replace('/^[\s|\-–—]+|[\s|\-–—]+$/u', '', (string) preg_replace('/\s+/u', ' ', $title));
         return mb_substr($title, 0, 255);
+    }
+
+    /**
+     * Is this (title) text Turkish? Letters only Turkish uses (ğ ı İ ş) or a Turkish case/possessive
+     * suffix after an apostrophe ("Ronaldo’nun", "Pelé’nin", "Juventus’a"). English, Portuguese and
+     * Arabic channel titles ("NEXT STOP: MIAMI", "COMEÇA HOJE!", "DOESN’T") do not match.
+     */
+    public static function looksTurkish(string $text): bool
+    {
+        if (preg_match('/[ğĞıİşŞ]/u', $text) === 1) {
+            return true;
+        }
+        return preg_match("/\\p{L}['’](?:n[ıiuü]n|[ıiuü]n|[dt][ae]n|[dt][ae]|y[ae]|[ae]|y?[ıiuü])(?!\\p{L})/u", mb_strtolower($text)) === 1;
     }
 
     /** Normalise a description: decode entities, unify newlines, trim, cap length. */
@@ -210,6 +232,27 @@ final class VideoText
     public static function hasLatinText(string $title): bool
     {
         return preg_match('/\p{Latin}{2,}/u', $title) === 1;
+    }
+
+    /**
+     * Bilingual Arabic + English channel titles ("كواليس فوزنا … 💛 Ronaldo & Alhamdan Seal the Win"):
+     * the Latin-script part, which reads cleanly in a left-to-right Turkish layout. Titles without
+     * Arabic script, or without a Latin part of at least two words, are returned unchanged.
+     */
+    public static function latinSegment(string $title): string
+    {
+        if (preg_match('/\p{Arabic}/u', $title) !== 1) {
+            return $title;
+        }
+        $parts = preg_split('/\s*(?:\p{Extended_Pictographic}[\x{FE0F}\x{200D}\p{Extended_Pictographic}]*|\||\s[-–—]\s)\s*/u', $title) ?: [];
+        $best = '';
+        foreach ($parts as $part) {
+            $part = trim($part);
+            if (preg_match('/\p{Arabic}/u', $part) !== 1 && preg_match('/\p{Latin}{2,}\S*\s+\S*\p{Latin}{2,}/u', $part) === 1 && mb_strlen($part) > mb_strlen($best)) {
+                $best = $part;
+            }
+        }
+        return $best !== '' ? $best : $title;
     }
 
     /** Lowercase alphanumeric part of the id ('c_JlCriK3fY', 5 => 'cjlcr'). */

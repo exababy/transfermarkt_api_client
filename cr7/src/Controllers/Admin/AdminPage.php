@@ -5,7 +5,6 @@ declare(strict_types=1);
 namespace App\Controllers\Admin;
 
 use App\Core\Csrf;
-use App\Core\Database;
 use App\Core\HttpException;
 use App\Core\Request;
 use App\Core\Response;
@@ -78,12 +77,6 @@ final class AdminPage
         $pages = max(1, (int) ceil($total / max(1, $perPage)));
         $page = min(max(1, $page), $pages);
         return ['page' => $page, 'pages' => $pages, 'offset' => ($page - 1) * $perPage, 'total' => $total, 'perPage' => $perPage];
-    }
-
-    /** '%term%' for `LIKE ? ESCAPE '\'`. */
-    public static function like(string $term): string
-    {
-        return '%' . Database::likeEscape($term) . '%';
     }
 
     /** Trimmed string query parameter ('' when missing or not a string). */

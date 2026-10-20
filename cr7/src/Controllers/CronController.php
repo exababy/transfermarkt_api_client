@@ -7,17 +7,19 @@ namespace App\Controllers;
 use App\Core\Config;
 use App\Core\Request;
 use App\Core\Response;
+use App\Core\Settings;
 use App\Cron\Scheduler;
 
 /**
  * GET /cron/{token}[?task=news-fetch][&force=1] — web cron for hosts without CLI cron.
- * Disabled (404) unless cron.web_token is configured; token compared in constant time.
+ * Disabled (404) unless cron.web_token is set (admin › Ayarlar stores it in the settings table;
+ * config/config.php is the fallback); token compared in constant time.
  */
 final class CronController
 {
     public function run(Request $request): Response
     {
-        $expected = (string) Config::get('cron.web_token', '');
+        $expected = (string) Settings::get('cron.web_token', Config::get('cron.web_token', ''));
         $given = (string) $request->param('token', '');
         if ($expected === '' || !hash_equals($expected, $given)) {
             return Response::notFound();

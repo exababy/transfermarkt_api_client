@@ -11,7 +11,6 @@
  * @var bool $registryAvailable
  * @var array<string, mixed> $defaults config defaults per input
  * @var string $publishWindow
- * @var int $maxAgeHours
  * @var string $youtubeMasked
  * @var string $cronToken
  * @var bool $cronRevealed
@@ -95,11 +94,28 @@ $webCronLine = $cronUrl !== '' ? '*/10 * * * * curl -fsS "' . $cronUrl . '" >/de
         <?= $err('spinner_min_change_ratio') ?>
       </div>
       <div class="field">
-        <span class="label">Yayın penceresi ve haber yaşı</span>
-        <p class="static-value"><?= e($publishWindow) ?> · en fazla <?= (int) $maxAgeHours ?> saatlik haberler</p>
-        <p class="form-help"><code>config/config.php</code> içindeki <code>news.publish_window</code> ve <code>news.max_age_hours</code> ile değiştirilir.</p>
+        <label for="news_max_age_hours">En fazla haber yaşı (saat)</label>
+        <input class="input" id="news_max_age_hours" name="news_max_age_hours" type="number" min="6" max="168" step="1" inputmode="numeric" value="<?= e($val('news_max_age_hours')) ?>" required<?= $aria('news_max_age_hours', 'h-age') ?>>
+        <p class="form-help" id="h-age">6–168. Bundan eski kaynak haberler toplanmaz ve yayınlanmaz. Varsayılan: <?= e((string) $defaults['news_max_age_hours']) ?>.</p>
+        <?= $err('news_max_age_hours') ?>
       </div>
     </div>
+    <fieldset aria-describedby="h-window">
+      <legend class="label">Yayın penceresi (İstanbul saati) — şu an: <?= e($publishWindow) ?></legend>
+      <div class="form-row">
+        <div class="field">
+          <label for="news_window_from">Başlangıç saati</label>
+          <input class="input" id="news_window_from" name="news_window_from" type="number" min="0" max="23" step="1" inputmode="numeric" value="<?= e($val('news_window_from')) ?>" required<?= $aria('news_window_from') ?>>
+          <?= $err('news_window_from') ?>
+        </div>
+        <div class="field">
+          <label for="news_window_to">Bitiş saati</label>
+          <input class="input" id="news_window_to" name="news_window_to" type="number" min="0" max="24" step="1" inputmode="numeric" value="<?= e($val('news_window_to')) ?>" required<?= $aria('news_window_to') ?>>
+          <?= $err('news_window_to') ?>
+        </div>
+      </div>
+      <p class="form-help" id="h-window">Otomatik haberler yalnızca bu saatler arasında yayınlanır (bitiş saati hariç; 24 = gece yarısına kadar). Başlangıç ve bitiş aynıysa gün boyu yayın yapılır. Varsayılan: <?= e($defaults['news_window']) ?>.</p>
+    </fieldset>
     <label class="checkbox">
       <input type="checkbox" name="news_index_spun_posts" value="1"<?= $isChecked('news_index_spun_posts') ? ' checked' : '' ?>>
       <span>Otomatik (spin) haberler arama motorlarında indekslensin<span class="form-help block">Kapatırsanız yeni otomatik haberler <code>noindex</code> olarak yayınlanır ve site haritasına girmez. Mevcut haberler için haber düzenleme ekranını kullanın.</span></span>
@@ -180,10 +196,21 @@ $webCronLine = $cronUrl !== '' ? '*/10 * * * * curl -fsS "' . $cronUrl . '" >/de
           <input class="input mono" id="indexnow_key" name="indexnow_key" type="text" value="<?= e($val('indexnow_key')) ?>" maxlength="128" spellcheck="false"<?= $aria('indexnow_key', 'h-indexnow') ?>>
           <button class="btn" type="submit" form="gen-indexnow"<?= $val('indexnow_key') !== '' ? ' data-confirm-click="Mevcut IndexNow anahtarı yenisiyle değiştirilsin mi?"' : '' ?>>Anahtar üret</button>
         </div>
-        <p class="form-help" id="h-indexnow">Yeni ve güncellenen haberler/videolar arama motorlarına anında bildirilir. Anahtar dosyası: <a href="<?= e($indexNowUrl) ?>" target="_blank" rel="noopener"><?= e($indexNowUrl) ?></a></p>
+        <p class="form-help" id="h-indexnow">Yeni ve güncellenen haberler/videolar arama motorlarına anında bildirilir. <?php if ($val('indexnow_key') !== '' && !isset($errors['indexnow_key'])): ?>Anahtar dosyası: <a href="<?= e($indexNowUrl) ?>" target="_blank" rel="noopener"><?= e($indexNowUrl) ?></a><?php else: ?>Anahtar kaydedildiğinde <code><?= e($indexNowUrl) ?></code> adresinden sunulur.<?php endif; ?></p>
         <?= $err('indexnow_key') ?>
       </div>
     </div>
+    <div class="form-row form-row-3">
+      <?php foreach (['seo_google_verification' => ['Google Search Console', 'google-site-verification'], 'seo_bing_verification' => ['Bing Webmaster Tools', 'msvalidate.01'], 'seo_yandex_verification' => ['Yandex Webmaster', 'yandex-verification']] as $name => [$label, $meta]): ?>
+      <div class="field">
+        <label for="<?= e($name) ?>"><?= e($label) ?> doğrulama kodu</label>
+        <input class="input mono" id="<?= e($name) ?>" name="<?= e($name) ?>" type="text" value="<?= e($val($name)) ?>" maxlength="300" spellcheck="false"<?= $aria($name, 'h-verify') ?>>
+        <p class="form-help">Ana sayfaya <code>&lt;meta name="<?= e($meta) ?>"&gt;</code> olarak eklenir.</p>
+        <?= $err($name) ?>
+      </div>
+      <?php endforeach; ?>
+    </div>
+    <p class="form-help" id="h-verify">“HTML etiketi” doğrulama yöntemindeki kodu ya da meta etiketinin tamamını yapıştırın; kaydettikten sonra webmaster aracında “Doğrula”ya basın. Boş bırakılırsa etiket eklenmez.</p>
   </section>
 
   <section class="admin-card settings-group" id="youtube" aria-labelledby="g-yt">

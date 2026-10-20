@@ -52,9 +52,10 @@ final class PaytrGateway extends AbstractGateway
         return $this->str('merchant_id') !== '' && $this->str('merchant_key') !== '' && $this->str('merchant_salt') !== '';
     }
 
+    /** Off unless the admin switches it on: test-mode payments (PayTR test cards) are not real payments. */
     public function testMode(): bool
     {
-        return Shop::bool($this->config['test_mode'] ?? true);
+        return Shop::bool($this->config['test_mode'] ?? false);
     }
 
     /** "CR7-AB12CD" => "CR7AB12CD" (PayTR allows alphanumerics only). */
@@ -180,6 +181,14 @@ final class PaytrGateway extends AbstractGateway
             'merchant_oid', 'status', 'total_amount', 'payment_amount', 'payment_type', 'currency', 'test_mode',
             'installment_count', 'failed_reason_code', 'failed_reason_msg',
         ]));
+        // A test-mode transaction (PayTR's public test cards) is no payment: book it only while the shop is
+        // deliberately in test mode (e.g. a token issued before the admin switched test mode off).
+        $testPayment = (string) ($post['test_mode'] ?? '0') === '1';
+        if ($status === 'success' && $testPayment && !$this->testMode()) {
+            Log::warning('payment', 'PayTR test-mode notification ignored: the gateway is in live mode', ['merchant_oid' => mb_substr($oid, 0, 64)]);
+            $status = 'test';
+            $payload['failed_reason_msg'] = 'test_mode=1 bildirimi canlı modda kabul edilmedi';
+        }
         return [
             'valid' => true,
             'order_no' => self::orderNoFromOid($oid),
@@ -189,7 +198,7 @@ final class PaytrGateway extends AbstractGateway
             'amount_mode' => $paymentAmount !== null ? 'exact' : 'min',
             'ref' => 'paytr:' . $oid,
             'payload' => ['gateway' => 'paytr'] + array_map(static fn ($v): string => mb_substr((string) $v, 0, 200), $payload),
-            'message' => $status === 'success' ? 'PayTR payment success' : 'PayTR payment failed: ' . mb_substr((string) ($post['failed_reason_msg'] ?? ''), 0, 200),
+            'message' => $status === 'success' ? 'PayTR payment success' : 'PayTR payment failed: ' . mb_substr((string) ($payload['failed_reason_msg'] ?? ''), 0, 200),
         ];
     }
 }

@@ -43,6 +43,8 @@ final class VideoSync
 
     private const REJECTED_CACHE = 'videos.rejected';
     private const REJECTED_TTL = 7 * 86400;
+    /** Setting: youtube ids that tidyImported() hid as off-topic (never hidden twice). */
+    private const OFF_TOPIC_HIDDEN = 'videos.offtopic_hidden';
 
     private YouTubeFeed $feed;
     private YouTubeApi $api;
@@ -87,6 +89,72 @@ final class VideoSync
         return array_values(array_map(static fn (array $c): array => [
             'id' => $c['id'], 'name' => $c['name'], 'handle' => (string) ($c['handle'] ?? ''), 'filter' => (bool) $c['filter'],
         ], $byId));
+    }
+
+    /**
+     * Title stored by the old byte-wise trim, which turned a trailing emoji into '?' ("… THE KEEPER ?"
+     * for "… THE KEEPER 👀"): the clean channel title, or null. Admin-edited titles never match.
+     */
+    public static function repairedTitle(string $stored, string $channelTitle): ?string
+    {
+        $fresh = VideoText::cleanTitle($channelTitle);
+        if ($fresh === '' || $fresh === $stored || !str_ends_with($stored, '?') || str_ends_with($fresh, '?')) {
+            return null;
+        }
+        return str_starts_with($fresh, rtrim(mb_substr($stored, 0, -1))) ? $fresh : null;
+    }
+
+    /** Broken titles of synced videos no longer in the feeds: re-read via oEmbed (a few per run). */
+    private function repairBrokenTitles(array $seen): int
+    {
+        $rows = Database::fetchAll("SELECT id, youtube_id, title FROM videos WHERE source <> 'manual' AND title LIKE ? ORDER BY id LIMIT 10", ['%?']);
+        $fixed = 0;
+        foreach ($rows as $row) {
+            if (in_array((string) $row['youtube_id'], array_map('strval', $seen), true)) {
+                continue;
+            }
+            $meta = $this->importer->oembed((string) $row['youtube_id']);
+            $title = $meta !== null ? self::repairedTitle((string) $row['title'], (string) $meta['title']) : null;
+            if ($title !== null) {
+                Database::update('videos', ['title' => $title, 'updated_at' => Date::now()], 'id = ?', [(int) $row['id']]);
+                $fixed++;
+            }
+        }
+        return $fixed;
+    }
+
+    /**
+     * Rows imported before the relevance rules: off-topic uploads (MMA / eSports promos) are hidden
+     * once — their ids are remembered, so an admin can publish one again — and Arabic-first bilingual
+     * titles keep their Latin part (admin-edited Turkish titles never contain Arabic script).
+     * Manually added videos are never touched.
+     */
+    private function tidyImported(): int
+    {
+        $hidden = array_map('strval', (array) Settings::get(self::OFF_TOPIC_HIDDEN, []));
+        $rows = Database::fetchAll("SELECT id, youtube_id, title FROM videos WHERE source <> 'manual' AND status = ?", ['published']);
+        $changed = 0;
+        $newlyHidden = [];
+        foreach ($rows as $row) {
+            $title = (string) $row['title'];
+            $changes = [];
+            if (Categorizer::isOffTopic($title) && !in_array((string) $row['youtube_id'], $hidden, true)) {
+                $changes['status'] = 'hidden';
+                $newlyHidden[] = (string) $row['youtube_id'];
+            }
+            $latin = VideoText::latinSegment($title);
+            if ($latin !== $title) {
+                $changes['title'] = $latin;
+            }
+            if ($changes !== []) {
+                Database::update('videos', $changes + ['updated_at' => Date::now()], 'id = ?', [(int) $row['id']]);
+                $changed++;
+            }
+        }
+        if ($newlyHidden !== []) {
+            Settings::set(self::OFF_TOPIC_HIDDEN, array_values(array_unique(array_merge($hidden, $newlyHidden))));
+        }
+        return $changed;
     }
 
     /** Channel id for an oEmbed author (handle URL 'https://www.youtube.com/@manutd' or exact name), or null. */
@@ -176,12 +244,22 @@ final class VideoSync
             if ($row['duration_seconds'] === null && !empty($fresh['duration_seconds'])) {
                 $changes['duration_seconds'] = (int) $fresh['duration_seconds'];
             }
+            $repaired = isset($fresh['title']) ? self::repairedTitle($row['title'], (string) $fresh['title']) : null;
+            if ($repaired !== null) {
+                $changes['title'] = $repaired;
+            }
             if ($changes !== []) {
-                $changes['updated_at'] = Date::now();
+                // lastmod (sitemap) follows what visitors see: a new view count alone is not a content change.
+                if (array_diff_key($changes, ['view_count' => true]) !== []) {
+                    $changes['updated_at'] = Date::now();
+                }
                 Database::update('videos', $changes, 'id = ?', [(int) $row['id']]);
                 $stats['updated']++;
             }
         }
+
+        $stats['updated'] += $this->repairBrokenTitles(array_keys($existing));
+        $stats['updated'] += $this->tidyImported();
 
         $rejected = $this->rejected();
         $rejectedChanged = false;
@@ -212,6 +290,7 @@ final class VideoSync
                 $stats['skipped']++;
                 continue;
             }
+            $video['title'] = VideoText::latinSegment((string) $video['title']);
             if (!$useApi && $this->importer->oembed($youtubeId) === null) {
                 $stats['skipped']++;
                 if ($this->importer->lastLookupWasFinal()) { // not embeddable / gone: do not re-check for a week
@@ -246,8 +325,8 @@ final class VideoSync
     private static function acceptable(array $video, bool $fromSearch): bool
     {
         $title = (string) ($video['title'] ?? '');
-        if ($title === '' || !VideoText::hasLatinText($title)) {
-            return false;
+        if ($title === '' || !VideoText::hasLatinText($title) || Categorizer::isOffTopic($title)) {
+            return false; // Arabic-only, or not football (MMA / eSports promos on UR · Cristiano)
         }
         return !$fromSearch || Categorizer::mentionsRonaldo($title, (string) ($video['description'] ?? ''));
     }
@@ -271,19 +350,20 @@ final class VideoSync
 
     /**
      * @param list<string> $ids
-     * @return array<string, array{id: int, view_count: ?int, duration_seconds: ?int}>
+     * @return array<string, array{id: int, title: string, view_count: ?int, duration_seconds: ?int}>
      */
     private function existing(array $ids): array
     {
         $out = [];
         foreach (array_chunk($ids, 200) as $chunk) {
             $rows = Database::fetchAll(
-                'SELECT id, youtube_id, view_count, duration_seconds FROM videos WHERE youtube_id IN (' . implode(', ', array_fill(0, count($chunk), '?')) . ')',
+                'SELECT id, youtube_id, title, view_count, duration_seconds FROM videos WHERE youtube_id IN (' . implode(', ', array_fill(0, count($chunk), '?')) . ')',
                 array_values($chunk)
             );
             foreach ($rows as $row) {
                 $out[(string) $row['youtube_id']] = [
                     'id' => (int) $row['id'],
+                    'title' => (string) $row['title'],
                     'view_count' => $row['view_count'] !== null ? (int) $row['view_count'] : null,
                     'duration_seconds' => $row['duration_seconds'] !== null ? (int) $row['duration_seconds'] : null,
                 ];

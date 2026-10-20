@@ -49,6 +49,7 @@ return static function (Router $r): void {
     $r->get('/iletisim', [PageController::class, 'contact']);
     $r->get('/sitemap.xml', [SitemapController::class, 'index']);
     $r->get('/sitemap-{type}.xml', [SitemapController::class, 'show']);
+    $r->get('/sitemap-posts-{id}.xml', [SitemapController::class, 'postsPage']);
     $r->get('/robots.txt', [SitemapController::class, 'robots']);
 
     // Shop (public, indexable; ordering gated by shop.orders_enabled)

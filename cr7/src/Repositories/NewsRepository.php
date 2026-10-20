@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace App\Repositories;
 
+use App\Core\App;
 use App\Core\Database;
 use App\Services\News\Tagger;
 use App\Support\Date;
@@ -41,6 +42,17 @@ final class NewsRepository
         return $row === null ? null : self::fullRow($row);
     }
 
+    /** Current slug of the visible post that used $slug before it was renamed (=> 301), or null. */
+    public function movedSlug(string $slug): ?string
+    {
+        $id = SlugRedirectRepository::target(SlugRedirectRepository::POST, $slug);
+        if ($id === null) {
+            return null;
+        }
+        $current = Database::fetchValue('SELECT slug FROM posts WHERE id = ? AND status = ? AND published_at <= ?', [$id, 'published', Date::now()]);
+        return is_string($current) && $current !== $slug ? $current : null;
+    }
+
     /** Any post by id (also drafts), for the pipeline/admin. */
     public function findById(int $id): ?array
     {
@@ -61,9 +73,9 @@ final class NewsRepository
         $where = ['status = ?', 'published_at <= ?'];
         $params = ['published', Date::now()];
         foreach ($terms as $term) {
-            $like = '%' . Database::likeEscape($term) . '%';
-            $where[] = "(title LIKE ? ESCAPE '\\' OR summary LIKE ? ESCAPE '\\' OR tags LIKE ? ESCAPE '\\')";
-            array_push($params, $like, $like, $like);
+            [$sql, $termParams] = Database::containsAny(['title', 'summary', 'tags'], $term);
+            $where[] = $sql;
+            array_push($params, ...$termParams);
         }
         $params[] = max(1, $limit);
         $rows = Database::fetchAll(
@@ -73,18 +85,24 @@ final class NewsRepository
         return array_map(self::listRow(...), $rows);
     }
 
-    /** @return list<array{url: string, lastmod: string, image: ?string}> indexable posts only */
-    public function forSitemap(int $limit = 5000): array
+    /** @return list<array{url: string, lastmod: string, image: ?string}> indexable posts only, newest first */
+    public function forSitemap(int $limit = 5000, int $offset = 0): array
     {
         $rows = Database::fetchAll(
-            'SELECT slug, image_path, published_at, updated_at FROM posts WHERE status = ? AND is_indexable = 1 AND published_at <= ? ORDER BY published_at DESC LIMIT ?',
-            ['published', Date::now(), max(1, $limit)]
+            'SELECT slug, image_path, published_at, updated_at FROM posts WHERE status = ? AND is_indexable = 1 AND published_at <= ? ORDER BY published_at DESC, id DESC LIMIT ? OFFSET ?',
+            ['published', Date::now(), max(1, $limit), max(0, $offset)]
         );
         return array_map(static fn (array $r): array => [
             'url' => url('/haber/' . $r['slug']),
             'lastmod' => (string) ($r['updated_at'] ?: $r['published_at']),
-            'image' => !empty($r['image_path']) ? url((string) $r['image_path']) : null,
+            'image' => self::imageUrl($r['image_path'] ?? null),
         ], $rows);
+    }
+
+    /** Number of posts forSitemap() can list (splits the posts sitemap into files). */
+    public function countForSitemap(): int
+    {
+        return (int) Database::fetchValue('SELECT COUNT(*) FROM posts WHERE status = ? AND is_indexable = 1 AND published_at <= ?', ['published', Date::now()]);
     }
 
     /** @return list<array{url: string, title: string, published_at: string}> last 48 h, indexable only */
@@ -120,10 +138,12 @@ final class NewsRepository
         if ($name !== null) {
             return $name;
         }
-        $rows = Database::fetchAll("SELECT tags FROM posts WHERE status = ? AND tags IS NOT NULL AND tags <> '' ORDER BY published_at DESC LIMIT 3000", ['published']);
-        foreach ($rows as $row) {
+        // Every post, not just the newest few thousand (streamed: only the tags column is read).
+        $statement = Database::query("SELECT tags FROM posts WHERE status = ? AND tags IS NOT NULL AND tags <> '' ORDER BY published_at DESC, id DESC", ['published']);
+        while (($row = $statement->fetch(\PDO::FETCH_ASSOC)) !== false) {
             foreach (Tagger::fromColumn((string) $row['tags']) as $tag) {
                 if ($tag['slug'] === $slug) {
+                    $statement->closeCursor();
                     return $tag['name'];
                 }
             }
@@ -131,24 +151,52 @@ final class NewsRepository
         return null;
     }
 
-    /** Published posts carrying tag $slug, newest first. */
+    /** Published posts carrying tag $slug, newest first (paged in SQL, no cap on the archive size). */
     public function byTag(string $slug, int $limit = 12, int $offset = 0): array
     {
-        $ids = $this->idsByTag($slug);
-        $ids = array_slice($ids, max(0, $offset), max(0, $limit));
-        if ($ids === []) {
+        $match = $this->tagWhere($slug);
+        if ($match === null || $limit <= 0) {
             return [];
         }
         $rows = Database::fetchAll(
-            'SELECT ' . self::LIST_COLUMNS . ' FROM posts WHERE id IN (' . implode(',', array_fill(0, count($ids), '?')) . ') ORDER BY published_at DESC, id DESC',
-            $ids
+            'SELECT ' . self::LIST_COLUMNS . ' FROM posts WHERE status = ? AND published_at <= ? AND ' . $match[0] . ' ORDER BY published_at DESC, id DESC LIMIT ? OFFSET ?',
+            ['published', Date::now(), ...$match[1], $limit, max(0, $offset)]
         );
         return array_map(self::listRow(...), $rows);
     }
 
     public function countByTag(string $slug): int
     {
-        return count($this->idsByTag($slug));
+        $match = $this->tagWhere($slug);
+        return $match === null ? 0 : (int) Database::fetchValue(
+            'SELECT COUNT(*) FROM posts WHERE status = ? AND published_at <= ? AND ' . $match[0],
+            ['published', Date::now(), ...$match[1]]
+        );
+    }
+
+    /**
+     * Tags of visible posts with their post count and newest post time (sitemap of tag pages).
+     * Every visible post is counted (streamed: only the tag and date columns are read).
+     *
+     * @return array<string, array{name: string, count: int, lastmod: string}> slug => tag
+     */
+    public function tagCounts(): array
+    {
+        $statement = Database::query(
+            "SELECT tags, published_at, updated_at FROM posts WHERE status = ? AND published_at <= ? AND tags IS NOT NULL AND tags <> '' ORDER BY published_at DESC, id DESC",
+            ['published', Date::now()]
+        );
+        $out = [];
+        while (($row = $statement->fetch(\PDO::FETCH_ASSOC)) !== false) {
+            $lastmod = (string) ($row['updated_at'] ?: $row['published_at']);
+            foreach (Tagger::fromColumn((string) $row['tags']) as $tag) {
+                $entry = $out[$tag['slug']] ?? ['name' => $tag['name'], 'count' => 0, 'lastmod' => $lastmod];
+                $entry['count']++;
+                $entry['lastmod'] = max($entry['lastmod'], $lastmod);
+                $out[$tag['slug']] = $entry;
+            }
+        }
+        return $out;
     }
 
     /** Other published posts sharing tags with $post (most shared tags, then newest); tops up with latest posts. */
@@ -229,43 +277,46 @@ final class NewsRepository
         return $slug;
     }
 
-    /** Number of automatically published (spun) posts between two UTC datetimes. */
+    /** Number of automatically published (spun) posts between two UTC datetimes (unpublished ones do not count). */
     public function countSpunBetween(string $fromUtc, string $toUtc): int
     {
         return (int) Database::fetchValue(
-            'SELECT COUNT(*) FROM posts WHERE is_spun = 1 AND news_item_id IS NOT NULL AND published_at >= ? AND published_at < ?',
+            "SELECT COUNT(*) FROM posts WHERE is_spun = 1 AND news_item_id IS NOT NULL AND status = 'published' AND published_at >= ? AND published_at < ?",
             [$fromUtc, $toUtc]
         );
     }
 
-    /** UTC publish time of the latest automatically published post, or null. */
+    /**
+     * UTC publish time of the latest automatically published post that is already live, or null
+     * (a post the admin scheduled for tomorrow must not hold back automatic publishing until then).
+     */
     public function lastSpunAt(): ?string
     {
-        $value = Database::fetchValue('SELECT MAX(published_at) FROM posts WHERE is_spun = 1 AND news_item_id IS NOT NULL');
+        $value = Database::fetchValue(
+            "SELECT MAX(published_at) FROM posts WHERE is_spun = 1 AND news_item_id IS NOT NULL AND status = 'published' AND published_at <= ?",
+            [Date::now()]
+        );
         return is_string($value) && $value !== '' ? $value : null;
     }
 
-    /** @return list<int> ids of published posts with tag $slug, newest first */
-    private function idsByTag(string $slug): array
+    /**
+     * SQL condition + params matching posts that carry tag $slug: its name (case-insensitive
+     * LIKE) as a whole element of the ', '-separated tags column; null for an unknown tag.
+     *
+     * @return array{0: string, 1: list<string>}|null
+     */
+    private function tagWhere(string $slug): ?array
     {
         $name = $this->tagName($slug);
         if ($name === null) {
-            return [];
+            return null;
         }
-        $rows = Database::fetchAll(
-            "SELECT id, tags FROM posts WHERE status = ? AND published_at <= ? AND tags LIKE ? ESCAPE '\\' ORDER BY published_at DESC, id DESC LIMIT 5000",
-            ['published', Date::now(), '%' . Database::likeEscape($name) . '%']
-        );
-        $ids = [];
-        foreach ($rows as $row) {
-            foreach (Tagger::fromColumn((string) $row['tags']) as $tag) {
-                if ($tag['slug'] === $slug) {
-                    $ids[] = (int) $row['id'];
-                    break;
-                }
-            }
+        $like = Database::likeEscape($name);
+        $sql = [];
+        foreach ([1, 2, 3, 4] as $_) {
+            $sql[] = "REPLACE(tags, ', ', ',') LIKE ? ESCAPE '\\'";
         }
-        return $ids;
+        return ['(' . implode(' OR ', $sql) . ')', [$like, $like . ',%', '%,' . $like, '%,' . $like . ',%']];
     }
 
     private static function listRow(array $row): array
@@ -275,7 +326,7 @@ final class NewsRepository
             'slug' => (string) $row['slug'],
             'title' => (string) $row['title'],
             'summary' => (string) $row['summary'],
-            'image_url' => !empty($row['image_path']) ? url((string) $row['image_path']) : null,
+            'image_url' => self::imageUrl($row['image_path'] ?? null),
             'published_at' => (string) $row['published_at'],
             'updated_at' => (string) ($row['updated_at'] ?? $row['published_at']),
             'source_name' => $row['source_name'] !== null ? (string) $row['source_name'] : null,
@@ -292,9 +343,27 @@ final class NewsRepository
             }
         }
         $row['uniqueness'] = isset($row['uniqueness']) ? (float) $row['uniqueness'] : null;
-        $row['image_url'] = !empty($row['image_path']) ? url((string) $row['image_path']) : null;
+        $row['image_url'] = self::imageUrl($row['image_path'] ?? null);
         $row['url'] = '/haber/' . $row['slug'];
         $row['tag_list'] = Tagger::fromColumn($row['tags'] ?? '');
         return $row;
+    }
+
+    /**
+     * Absolute URL of a post image, or null when it is a local file (e.g. a generated /og/*.png)
+     * that no longer exists: cards then render their placeholder and og:image falls back to the
+     * default image instead of pointing at a 404.
+     */
+    public static function imageUrl(mixed $path): ?string
+    {
+        $path = trim((string) $path);
+        if ($path === '') {
+            return null;
+        }
+        $local = str_starts_with($path, '/') && !str_starts_with($path, '//');
+        if ($local && !is_file(App::basePath('public/' . ltrim((string) parse_url($path, PHP_URL_PATH), '/')))) {
+            return null;
+        }
+        return url($path);
     }
 }

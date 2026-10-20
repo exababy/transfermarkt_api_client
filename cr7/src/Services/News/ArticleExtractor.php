@@ -42,7 +42,8 @@ final class ArticleExtractor
         if (is_array($cached)) {
             return $cached['paragraphs'] === [] ? null : $cached;
         }
-        $response = Http::get($url, [
+        // The URL comes from a third-party feed: public hosts only, every redirect re-checked (no SSRF).
+        $response = Http::getPublic($url, [
             'Accept' => 'text/html,application/xhtml+xml;q=0.9,*/*;q=0.5',
             'Accept-Language' => 'tr-TR,tr;q=0.9',
         ], 20);
@@ -54,10 +55,31 @@ final class ArticleExtractor
         return $result;
     }
 
+    /**
+     * True while a failed fetch of $url is cached (30 min): extract() would answer from that
+     * cache without trying the network, so a retry now would not be a real retry.
+     */
+    public static function failedRecently(string $url): bool
+    {
+        $cached = Cache::get('news:article:' . sha1($url));
+        return is_array($cached) && ($cached['paragraphs'] ?? null) === [];
+    }
+
+    /** Drop a cached failure of $url so the next extract() fetches again (admin "Şimdi yayınla"). */
+    public static function forgetFailure(string $url): void
+    {
+        if (self::failedRecently($url)) {
+            Cache::forget('news:article:' . sha1($url));
+        }
+    }
+
     /** Extract from an HTML string (no network). */
     public static function fromHtml(string $html, ?string $contentType = null): ?array
     {
         $html = self::toUtf8($html, $contentType);
+        // The text is UTF-8 now: a leftover <meta charset="windows-1254"> / http-equiv charset would
+        // make libxml decode it a second time (mojibake) or drop it, so every declaration says utf-8.
+        $html = (string) preg_replace('/(<meta\b[^>]*?\bcharset\s*=\s*["\']?)[A-Za-z0-9._:-]+/i', '${1}utf-8', $html);
         $doc = new \DOMDocument();
         $previous = libxml_use_internal_errors(true);
         $doc->loadHTML('<?xml encoding="UTF-8">' . $html, LIBXML_NONET | LIBXML_NOERROR | LIBXML_NOWARNING | LIBXML_COMPACT);

@@ -220,6 +220,36 @@ final class Database
         return self::driver() === 'mysql' ? '`' . $name . '`' : '"' . $name . '"';
     }
 
+    /**
+     * Case-insensitive "contains" condition for one search term over several columns:
+     * ['(title LIKE ? ESCAPE '\' OR …)', params]. SQLite's LIKE folds ASCII only, and MySQL's
+     * utf8mb4_unicode_ci treats the Turkish dotless ı as a letter of its own (ı ≠ I), so the
+     * Turkish lower-, upper- and title-cased variants of the term are OR-ed in on both drivers
+     * ("şampiyon" finds "Şampiyonlar", "izmir" finds "İzmir", "ışık" finds "IŞIK").
+     *
+     * @param list<string> $columns trusted column names
+     * @return array{0: string, 1: list<string>}
+     */
+    public static function containsAny(array $columns, string $term): array
+    {
+        $variants = [$term];
+        // Non-ASCII letters, and i/I (Turkish İ/ı casing), need the extra variants.
+        if (preg_match('/[^\x00-\x7F]|[iI]/', $term) === 1) {
+            $lower = \App\Support\Str::lower($term);
+            $title = \App\Support\Str::upper(mb_substr($lower, 0, 1)) . mb_substr($lower, 1);
+            $variants = array_values(array_unique([$term, $lower, \App\Support\Str::upper($term), $title]));
+        }
+        $parts = [];
+        $params = [];
+        foreach ($columns as $column) {
+            foreach ($variants as $variant) {
+                $parts[] = $column . " LIKE ? ESCAPE '\\'";
+                $params[] = '%' . self::likeEscape($variant) . '%';
+            }
+        }
+        return ['(' . implode(' OR ', $parts) . ')', $params];
+    }
+
     /** Escape % _ \ for use in `LIKE ? ESCAPE '\'`. */
     public static function likeEscape(string $s): string
     {

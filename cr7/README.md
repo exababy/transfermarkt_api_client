@@ -1,169 +1,235 @@
 # CR7.com.tr
 
-Cristiano Ronaldo hakkında Türkçe, mobil öncelikli ve SEO uyumlu hayran sitesi: hayatı, kariyeri,
-oynadığı takımlar, Transfermarkt istatistikleri, otomatik haberler, videolar, kupalar ve forma mağazası.
+Cristiano Ronaldo hakkında Türkçe, mobil öncelikli, masaüstünde de tam uyumlu ve SEO kurallarına göre
+hazırlanmış bağımsız hayran sitesi.
 
-- **PHP 8.1+**, yalnızca **PDO** (MySQL/MariaDB canlıda, SQLite geliştirmede)
-- **Hiçbir Composer bağımlılığı yoktur**, derleme adımı yoktur (kendi otomatik yükleyicisi vardır)
-- Paylaşımlı hosting (cPanel, Apache + `.htaccess`, cron) için tasarlanmıştır
+| Bölüm | Adres | İçerik |
+| --- | --- | --- |
+| Hayatı | `/hayati` | Biyografi, hızlı bilgiler, zaman çizelgesi, sık sorulan sorular |
+| Kariyer | `/kariyer` | Altyapıdan Al-Nassr'a kulüp kulüp kariyer, transferler, piyasa değeri, milli takım |
+| Takımlar | `/takimlar`, `/takimlar/{kulüp}` | Oynadığı her kulüp ve Portekiz için ayrı sayfa |
+| İstatistikler | `/istatistikler`, `/istatistikler/maclar` | Transfermarkt verisiyle sezon, kulüp, turnuva ve maç maç istatistikler |
+| Kupalar | `/kupalar-ve-oduller` | Takım kupaları, bireysel ödüller, rekorlar |
+| Videolar | `/videolar`, `/video/{slug}` | Resmî YouTube kanallarından otomatik ve elle eklenen videolar |
+| Haberler | `/haberler`, `/haber/{slug}` | Otomatik haberler: günde en fazla 10, eş anlamlı değiştirme + çoklu kaynak karıştırma, **yapay zekâ yok**, birebir kopya yok |
+| Forma Mağazası | `/forma-magazasi`, `/forma/{slug}` | Herkese açık ve indekslenen mağaza; **sipariş alma varsayılan olarak kapalı**; PayTR, iyzico, Shopier, Havale/EFT |
+| Yönetim paneli | `/admin` | Haberler, haber kuyruğu, videolar, siparişler, ürünler, ödeme ve site ayarları |
+
+Teknik özet:
+
+- **PHP 8.1+**, veritabanı erişimi yalnızca **PDO** ile (canlıda MySQL/MariaDB, geliştirmede SQLite).
+- **Composer paketi yok**, ön yüz çatısı yok, derleme adımı yok; kendi otomatik yükleyicisi vardır.
+- Paylaşımlı hosting (cPanel, Apache + `.htaccess`, cron) için tasarlanmıştır.
 
 ## İçindekiler
 
 1. [Gereksinimler](#gereksinimler)
 2. [Klasör yapısı](#klasör-yapısı)
 3. [cPanel paylaşımlı hostinge kurulum](#cpanel-paylaşımlı-hostinge-kurulum)
-4. [Zamanlanmış görevler (cron)](#zamanlanmış-görevler-cron)
-5. [Klasör izinleri](#klasör-izinleri)
-6. [Güncelleme](#güncelleme)
-7. [Yerel geliştirme ve testler](#yerel-geliştirme-ve-testler)
-8. [Güvenlik notları](#güvenlik-notları)
+4. [Yapılandırma (config.php ve panel ayarları)](#yapılandırma-configphp-ve-panel-ayarları)
+5. [Zamanlanmış görevler (cron)](#zamanlanmış-görevler-cron)
+6. [Hayatı, Kariyer ve Kupalar içerik dosyaları](#hayatı-kariyer-ve-kupalar-içerik-dosyaları)
+7. [Transfermarkt senkronizasyonu ve istatistikler](#transfermarkt-senkronizasyonu-ve-istatistikler)
+8. [Haber sistemi (spin)](#haber-sistemi-spin)
+9. [Videolar](#videolar)
+10. [Forma Mağazası ve ödeme](#forma-mağazası-ve-ödeme)
+11. [Yönetim paneli](#yönetim-paneli)
+12. [SEO](#seo)
+13. [Arama motorlarına kayıt (Google, Bing, Yandex) ve IndexNow](#arama-motorlarına-kayıt-google-bing-yandex-ve-indexnow)
+14. [Güvenlik notları](#güvenlik-notları)
+15. [Klasör izinleri](#klasör-izinleri)
+16. [Güncelleme ve yedekleme](#güncelleme-ve-yedekleme)
+17. [Yerel geliştirme ve testler](#yerel-geliştirme-ve-testler)
+18. [Sorun giderme](#sorun-giderme)
 
 ## Gereksinimler
 
 | Bileşen | Sürüm / not |
 | --- | --- |
 | PHP | 8.1 veya üstü (8.3 ile test edildi) |
-| PHP eklentileri | `pdo`, `pdo_mysql` (canlı) veya `pdo_sqlite` (yerel), `mbstring`, `dom`, `json`, `curl`, `gd` (FreeType ile), önerilen: `intl` |
-| Veritabanı | MySQL 5.7+ veya MariaDB 10.3+ (`utf8mb4`) |
+| PHP eklentileri | `pdo`, `pdo_mysql` (canlı) veya `pdo_sqlite` (yerel), `mbstring`, `dom`, `json`, `curl`, `gd` (FreeType desteğiyle), `fileinfo` (önerilen) |
+| Veritabanı | MySQL 5.7+ veya MariaDB 10.3+ (`utf8mb4`); MariaDB 10.11 ile test edildi |
 | Web sunucusu | Apache 2.4 + `mod_rewrite` (önerilen: `mod_headers`, `mod_expires`, `mod_deflate`) |
-| Cron | cPanel “Cron Jobs” veya eşdeğeri |
+| Cron | cPanel “Cron Jobs” ya da harici bir web cron servisi |
+| Dış bağlantı | Sunucu dışarıya HTTPS isteği yapabilmeli (Transfermarkt API, haber akışları, YouTube) |
 
 ## Klasör yapısı
 
 ```
 cr7/
-  public/        Belge kök dizini (document root): index.php, .htaccess, assets/, og/
-  src/           Uygulama kodu (App\ isim alanı)
-  templates/     PHP şablonları (layouts, partials, pages, admin, errors)
-  config/        config.example.php (şablon) ve config.php (gerçek ayarlar, git dışı)
+  public/        Belge kök dizini (document root): index.php, .htaccess, assets/, og/, uploads/
+  src/           Uygulama kodu (App\ isim alanı): Core, Controllers, Repositories, Services, Support, Cron, Install
+  templates/     PHP şablonları (layouts, partials, pages, admin, errors, install)
+  config/        config.example.php (şablon), news-sources.php (haber kaynakları), config.php (gerçek ayarlar, git dışı)
   database/      schema.mysql.sql, schema.sqlite.sql
-  content/       Editoryal içerik dosyaları (biyografi, kariyer, kupalar …)
-  storage/       cache/, logs/, locks/ (yazılabilir olmalı)
+  content/       Editoryal içerik: biography.php, career.php, honours.php, synonyms-tr.php, news-templates.php
+  storage/       cache/, logs/, locks/ (PHP yazabilmeli)
   bin/           install.php, cron.php, test.php (yalnızca komut satırı)
-  tests/         Testler
-  .htaccess      Belge kökü public/ yapılamıyorsa kullanılır
+  tests/         Testler ve test verileri
+  routes.php     Tüm adresler
+  .htaccess      Yalnızca belge kökü public/ yapılamıyorsa kullanılır
 ```
 
 ## cPanel paylaşımlı hostinge kurulum
 
-1. **Dosyaları yükleyin.** `cr7/` klasörünün tamamını hesabınıza yükleyin (ör. `/home/KULLANICI/cr7`).
-   Dosya Yöneticisi ile zip olarak yükleyip açabilir ya da SSH ile `git clone` kullanabilirsiniz.
-2. **Belge kökünü ayarlayın.**
-   - *Önerilen:* cPanel → **Alan Adları** (Domains) bölümünde `cr7.com.tr` için belge kökünü
-     `/home/KULLANICI/cr7/public` olarak değiştirin.
+1. **PHP sürümünü seçin.** cPanel → **MultiPHP Manager** (ya da “Select PHP Version”) bölümünde alan adı
+   için PHP 8.1 veya üstünü seçin. “Extensions” listesinde `pdo_mysql`, `mbstring`, `dom`, `curl`, `gd`,
+   `fileinfo` işaretli olmalıdır.
+2. **Dosyaları yükleyin.** `cr7/` klasörünün tamamını hesabınıza yükleyin (ör. `/home/KULLANICI/cr7`).
+   Dosya Yöneticisi ile zip olarak yükleyip açabilir ya da Terminal/SSH ile `git clone` kullanabilirsiniz.
+3. **Belge kökünü ayarlayın.**
+   - *Önerilen:* cPanel → **Alan Adları** (Domains) → `cr7.com.tr` → belge kökünü
+     `/home/KULLANICI/cr7/public` yapın.
    - *Belge kökü değiştirilemiyorsa:* `cr7/` klasörünün içeriğini `public_html/` içine koyun. Kökteki
-     `.htaccess` tüm istekleri `public/` klasörüne yönlendirir ve `src/`, `config/`, `storage/`,
-     `database/`, `bin/`, `templates/`, `content/`, `tests/` klasörlerine erişimi engeller.
-3. **MySQL veritabanı oluşturun.** cPanel → **MySQL Veritabanları**: yeni bir veritabanı ve kullanıcı
-   oluşturun, kullanıcıya veritabanı üzerinde **TÜM YETKİLER**i verin. Karşılaştırma (collation)
-   olarak `utf8mb4_unicode_ci` önerilir.
-4. **Ayar dosyasını hazırlayın.**
+     `.htaccess` tüm istekleri `public/` klasörüne yönlendirir; `src/`, `config/`, `storage/`, `database/`,
+     `bin/`, `templates/`, `content/`, `tests/` klasörlerine ve `routes.php`, `README.md` dosyalarına
+     dışarıdan erişimi engeller, `/public/...` adreslerini 301 ile köke taşır.
+4. **MySQL veritabanı oluşturun.** cPanel → **MySQL Veritabanları**: yeni bir veritabanı (ör.
+   `KULLANICI_cr7`) ve kullanıcı oluşturun, kullanıcıyı veritabanına **TÜM YETKİLER** ile ekleyin.
+   Karşılaştırma (collation) olarak `utf8mb4_unicode_ci` önerilir; tablolar zaten bu ayarla oluşturulur.
+5. **Ayar dosyasını hazırlayın** (Dosya Yöneticisi'nde kopyalayıp düzenleyebilir ya da Terminal'de):
    ```bash
+   cd ~/cr7
    cp config/config.example.php config/config.php
+   php -r 'echo bin2hex(random_bytes(32)), PHP_EOL;'   # app.secret için rastgele değer üretir
    ```
    `config/config.php` içinde en az şunları düzenleyin:
-   - `app.url` → `https://cr7.com.tr` (sonunda `/` olmadan)
-   - `app.secret` → en az 32 karakterlik rastgele bir değer (web kurulum anahtarı olarak da kullanılır)
-   - `db.*` → 3. adımda oluşturduğunuz veritabanı bilgileri (`driver` = `mysql`)
-   - isteğe bağlı: `cron.web_token`, `analytics.ga4_id`, `youtube.api_key`, `indexnow.key`
-5. **Kurulumu çalıştırın** (tekrar çalıştırmak güvenlidir; mevcut verilere dokunmaz):
-   - **SSH ile (önerilen):**
+   - `app.url` → `https://cr7.com.tr` (sonunda `/` olmadan; alt klasör kurulumunda `https://alan.com/cr7`)
+   - `app.secret` → yukarıdaki komutun ürettiği değer (en az 16, önerilen 64 karakter; web kurulum anahtarıdır)
+   - `app.contact_email` → iletişim adresi (iletişim sayfası ve yasal metinlerde görünür)
+   - `db.host`, `db.database`, `db.username`, `db.password` → 4. adımdaki bilgiler (`db.driver` = `mysql`;
+     cPanel'de `host` genellikle `localhost`'tur)
+6. **Kurulumu çalıştırın.** Kurulum tabloları oluşturur, yöneticiyi ekler, 11 forma ve 30 seçkin videoyu
+   yükler, paylaşım görsellerini üretir. Tekrar çalıştırmak güvenlidir; mevcut verilere dokunmaz.
+   - **Terminal/SSH ile (önerilen):**
      ```bash
      cd ~/cr7
      php bin/install.php --admin=admin --password='GÜÇLÜ-BİR-ŞİFRE'
      ```
-     `--password` verilmezse rastgele bir şifre üretilip ekrana yazılır. Mevcut yöneticinin şifresini
-     sıfırlamak için `--reset-password` ekleyin.
-   - **Tarayıcıdan:** `https://cr7.com.tr/kurulum?token=APP_SECRET_DEĞERİ` adresini açın, sunucu
-     kontrollerini inceleyin, yönetici kullanıcı adı ve şifresini girin. Bu sayfa yalnızca hiç yönetici
-     yokken ve doğru `app.secret` ile açılır; kurulumdan sonra 404 döner.
-6. **Giriş yapın:** `https://cr7.com.tr/admin/giris`.
-7. **HTTPS:** cPanel → **SSL/TLS Status** ile AutoSSL sertifikasını etkinleştirin. `public/.htaccess`
-   (ve kökteki `.htaccess`) tüm trafiği `https://` ve `www` olmayan adrese 301 ile yönlendirir. SSL henüz
-   hazır değilse bu iki kural bloğunu geçici olarak `#` ile devre dışı bırakın.
+     `--password` verilmezse rastgele bir şifre üretilip ekrana yazılır. Var olan yöneticinin şifresini
+     değiştirmek için: `php bin/install.php --reset-password --password='YENİ-ŞİFRE'`.
+   - **Tarayıcıdan (SSH yoksa):** `https://cr7.com.tr/kurulum?token=APP_SECRET_DEĞERİ` adresini açın,
+     sunucu kontrollerini inceleyin, yönetici kullanıcı adını ve şifresini (en az 10 karakter) girin. Bu sayfa
+     yalnızca hiç yönetici yokken ve doğru `app.secret` ile açılır; `app.secret` hâlâ `CHANGE_ME` ise 403,
+     kurulumdan sonra 404 döner.
+7. **İlk verileri çekin** (isteğe bağlı; cron zaten birkaç dakika içinde çalıştırır):
+   ```bash
+   php bin/cron.php all --force
+   ```
+   Transfermarkt istatistikleri (≈10 sn), haberler, ilk otomatik haber ve YouTube videoları gelir.
+8. **Cron'u kurun:** [Zamanlanmış görevler](#zamanlanmış-görevler-cron).
+9. **Giriş yapın:** `https://cr7.com.tr/admin/giris`. Ayarlar sayfasında Analytics, IndexNow, arama
+   motoru doğrulama kodları ve web cron anahtarını; Ödeme Ayarları sayfasında satıcı bilgilerini girin.
+10. **HTTPS:** cPanel → **SSL/TLS Status** ile AutoSSL sertifikasını etkinleştirin. `public/.htaccess`
+    (ve kökteki `.htaccess`) tüm trafiği `https://` ve `www` olmayan adrese 301 ile yönlendirir. SSL henüz
+    hazır değilse bu iki kural bloğunu geçici olarak `#` ile devre dışı bırakın.
+
+## Yapılandırma (config.php ve panel ayarları)
+
+Ayarlar iki katmanlıdır:
+
+1. **`config/config.php`** — sunucuya özel ve gizli değerler (veritabanı, `app.secret`, `app.url` …). Dosya
+   yoksa `config/config.example.php` kullanılır. Ortam değişkenleri `CR7_DB_DRIVER`, `CR7_DB_PATH`,
+   `CR7_DB_HOST`, `CR7_DB_PORT`, `CR7_DB_NAME`, `CR7_DB_USER`, `CR7_DB_PASS`, `CR7_APP_URL`, `CR7_DEBUG`
+   ilgili değerleri ezer.
+2. **Yönetim paneli** — `config.example.php` içinde `[panel]` ile işaretli anahtarlar panelden de
+   değiştirilebilir. Panelde kaydedilen değer veritabanındaki `settings` tablosuna yazılır ve
+   `config.php`'deki değerin önüne geçer.
+
+| Bölüm | Önemli anahtarlar |
+| --- | --- |
+| `app` | `url`, `secret`, `debug` (canlıda `false`), `timezone` (`Europe/Istanbul`), `contact_email`, `trust_proxy` (Cloudflare/vekil sunucu arkasında `true`), `trusted_proxies` (vekil başlıklarına yalnızca bu IP/CIDR'lerden gelen isteklerde güvenilir; boş = Cloudflare IP aralıkları; aynı sunucudaki nginx için `['127.0.0.1', '::1']`), `session_idle_minutes` |
+| `db` | `driver` (`mysql`/`sqlite`), `host`, `port`, `database`, `username`, `password`, `charset`, `sqlite_path` |
+| `transfermarkt` | `base_url`, `player_id` (8198), `language` (`tr-TR`), `timeout`, `retries` |
+| `news` | `daily_limit` (10), `min_interval_minutes` (60), `publish_window` ([7, 23]), `max_age_hours` (48), `keywords`, `similarity_threshold`, `index_spun_posts`, `sources`, `sources_disabled` |
+| `spinner` | `enabled`, `min_change_ratio` (0,40), `mix_sources`, `max_sources` (3), `min_words` (180) |
+| `shop` | `enabled`, `orders_enabled` (**false**), `shipping_fee`, `whatsapp`, `notify_email`, `payment_methods`, `company_*` (satıcı bilgileri) |
+| `payment` | `paytr`, `iyzico`, `shopier`, `havale` alt bölümleri |
+| `youtube` | `api_key` (isteğe bağlı), `channels`, `search_query` |
+| `site` | `hero_title`, `hero_subtitle`, `portrait_url` |
+| `seo` | `google_verification`, `bing_verification`, `yandex_verification` |
+| `sitemap` | `cache_ttl` (3600 sn; 0 = önbellek yok) |
+| `indexnow`, `cron`, `analytics` | `key`, `web_token`, `ga4_id` |
 
 ## Zamanlanmış görevler (cron)
 
-Görevler: `tm-sync` (Transfermarkt, 6 saatte bir), `news-fetch` (30 dk), `news-publish` (10 dk),
-`videos-sync` (3 saat). Tek bir cron satırı yeterlidir; zamanı gelen görevler otomatik çalışır ve
-eşzamanlı çalışmayı engelleyen bir kilit (`storage/locks/cron.lock`) kullanılır.
+| Görev | Aralık | Ne yapar |
+| --- | --- | --- |
+| `tm-sync` | 6 saat | Transfermarkt istatistiklerini günceller |
+| `news-fetch` | 30 dk | Haber kaynaklarını tarar, kuyruğa ekler, hikâyeleri kümeler |
+| `news-publish` | 10 dk | Uygunsa bir haber yazıp yayınlar (günlük limit, aralık ve yayın penceresi içinde) |
+| `videos-sync` | 3 saat | YouTube kanallarından yeni videoları alır |
+| `shop-expire` | 30 dk | Stoğu sınırlı ürünlerde ödenmemiş siparişleri iptal edip stoğu geri ekler (kartla ödeme 2 saat, havale/EFT 72 saat sonra; Shopier kontrolü bekleyenler hariç) |
 
-cPanel → **Cron Jobs** → “Her 10 dakikada bir”:
+Tek bir cron satırı yeterlidir: her çalışmada yalnızca zamanı gelen görevler çalışır, eşzamanlı çalışmayı
+bir kilit dosyası (`storage/locks/cron.lock`) engeller.
+
+**cPanel → Cron Jobs** → “Common Settings: Once Per Ten Minutes (*/10)” seçip komuta şunu yazın
+(`KULLANICI` yerine hesap adınızı; PHP yolu farklıysa cPanel'in gösterdiği yolu, ör.
+`/usr/local/bin/php` veya `/opt/cpanel/ea-php83/root/usr/bin/php`, kullanın):
 
 ```
 */10 * * * * /usr/bin/php /home/KULLANICI/cr7/bin/cron.php >/dev/null 2>&1
 ```
 
-Elle çalıştırma:
+Panelde Ayarlar → **Zamanlanmış görevler** bölümü bu satırı sunucudaki gerçek yolla hazır gösterir.
+
+Komut satırından elle çalıştırma:
 
 ```bash
 php bin/cron.php              # zamanı gelen tüm görevler
 php bin/cron.php news-fetch   # yalnızca bir görev (aralığı dolmuşsa)
 php bin/cron.php all --force  # aralığı beklemeden hepsi
+php bin/cron.php --help       # görev listesi
 ```
 
-Komut satırı cron'u olmayan sunucularda `config.php` içinde `cron.web_token` değerini (32+ rastgele
-karakter) ayarlayıp harici bir cron servisine şu adresi verin:
-`https://cr7.com.tr/cron/WEB_TOKEN` (isteğe bağlı `?task=news-fetch`). Token ayarlı değilse adres 404 döner.
+**Web cron (komut satırı cron'u olmayan sunucular için).** Yönetim paneli → Ayarlar → Zamanlanmış görevler
+→ **Anahtar üret** düğmesine basın; tam adres yalnızca o anda gösterilir:
 
-Son çalışmalar `cron_runs` tablosunda tutulur; günlükler `storage/logs/YYYY-AA-GG.log` dosyalarındadır.
+```
+https://cr7.com.tr/cron/WEB_CRON_ANAHTARI                    # zamanı gelen görevler
+https://cr7.com.tr/cron/WEB_CRON_ANAHTARI?task=news-fetch    # tek görev
+https://cr7.com.tr/cron/WEB_CRON_ANAHTARI?task=all&force=1   # aralığı beklemeden hepsi
+```
 
-## Klasör izinleri
+Bu adresi cron-job.org gibi bir servise 10 dakikada bir çağrılacak şekilde verin ya da başka bir sunucuda
+`*/10 * * * * curl -fsS "https://cr7.com.tr/cron/WEB_CRON_ANAHTARI" >/dev/null 2>&1` satırını kullanın.
+Anahtar `config.php` içindeki `cron.web_token` ile de verilebilir (panelde kaydedilen anahtar önceliklidir).
+Anahtar tanımlı değilse ya da yanlışsa adres 404 döner; paneldeki “Web cron'u kapat” kutusu anahtarı siler.
 
-| Yol | İzin |
+Son çalışmalar panelin ana sayfasında ve `cron_runs` tablosunda, ayrıntılar
+`storage/logs/YYYY-AA-GG.log` dosyalarında görülür.
+
+## Hayatı, Kariyer ve Kupalar içerik dosyaları
+
+Editoryal metinler veritabanında değil, `content/` altındaki PHP dosyalarındadır (kaynakları belirtilmiş,
+Ekim 2026 itibarıyla doğrulanmış Türkçe içerik):
+
+| Dosya | Kullanıldığı sayfalar |
 | --- | --- |
-| `storage/`, `storage/cache/`, `storage/logs/`, `storage/locks/` | 755 veya 775 (PHP yazabilmeli) |
-| `public/og/` | 755 veya 775 (haber OG görselleri) |
-| `config/config.php` | 640 veya 600 |
-| Diğer dosyalar | dosyalar 644, klasörler 755 |
+| `content/biography.php` | `/hayati`: giriş (`lead`), hızlı bilgiler, bölümler, zaman çizelgesi, 27 soruluk SSS (`FAQPage`), kaynaklar |
+| `content/career.php` | `/kariyer`, `/takimlar/{kulüp}`: kulüp dönemleri, altyapı, milli takım anlatıları; haberlerin kulüp arka plan paragrafları |
+| `content/honours.php` | `/kupalar-ve-oduller`: takım kupaları, bireysel ödüller, rekorlar |
+| `content/synonyms-tr.php` | Haber spinner'ının Türkçe eş anlamlı grupları (1.077 grup) ve korunan isimler |
+| `content/news-templates.php` | Haberlerin giriş, bağlam, kapanış ve başlık kalıpları |
 
-cPanel'de PHP genellikle hesap kullanıcısıyla çalıştığı için 755/644 yeterlidir.
+Bir bilgiyi güncellediğinizde dosyadaki `last_reviewed` tarihini de değiştirin; sayfaların “Son güncelleme”
+tarihi ve site haritasındaki `lastmod` buradan gelir. HTML alanlarında yalnızca `p`, `h3`, `ul`, `li`, `strong`,
+`em`, `a`, `blockquote`, `table` kullanın. Değişiklikten sonra `php -l content/biography.php` ile sözdizimini
+kontrol edin. Hakkında, İletişim ve Gizlilik sayfalarının revizyon tarihleri `PageController::REVISED`
+sabitindedir.
 
-## Güncelleme
+Site içi arama (`/arama?q=`) bu içerik bölümlerinde, haberlerde ve videolarda arar; Türkçe büyük/küçük harf
+farkını gözetmez (“şampiyonlar” → “Şampiyonlar Ligi”). Arama sonuçları `noindex,follow` olarak işaretlidir.
 
-1. Yedek alın: veritabanı (cPanel → phpMyAdmin → Dışa Aktar) ve `config/config.php`.
-2. Yeni dosyaları yükleyin (`config/config.php` ve `storage/` içeriğinin üzerine yazmayın) ya da
-   `git pull` yapın.
-3. Şemayı ve seed verilerini güncellemek için kurulumu yeniden çalıştırın (idempotenttir):
-   `php bin/install.php`
-4. Gerekirse önbelleği temizleyin: yönetim paneli → İşlemler → “Önbelleği temizle” ya da
-   `rm -f storage/cache/*.cache`.
+## Transfermarkt senkronizasyonu ve istatistikler
 
-## Yerel geliştirme ve testler
-
-```bash
-cd cr7
-export CR7_DB_DRIVER=sqlite CR7_DB_PATH=/tmp/cr7.sqlite CR7_APP_URL=http://127.0.0.1:8080 CR7_DEBUG=1
-php bin/install.php --password=admin12345
-php -S 127.0.0.1:8080 -t public public/index.php
-php bin/test.php            # tüm testler (bellek içi SQLite)
-php bin/test.php Router     # adı eşleşen testler
-```
-
-`config/config.php` yoksa `config.example.php` kullanılır; ortam değişkenleri (`CR7_DB_DRIVER`,
-`CR7_DB_PATH`, `CR7_DB_HOST`, `CR7_DB_PORT`, `CR7_DB_NAME`, `CR7_DB_USER`, `CR7_DB_PASS`,
-`CR7_APP_URL`, `CR7_DEBUG`) ilgili ayarları ezer.
-
-## Güvenlik notları
-
-- Tüm SQL sorguları hazırlıklı ifadelerle (prepared statements) çalışır; şablonlarda çıktı `e()` ile kaçışlanır.
-- Formlar CSRF belirteci taşır; yönetici girişi IP başına 15 dakikada 5 hatalı denemeyle sınırlandırılır,
-  girişte oturum kimliği yenilenir, oturum çerezi `HttpOnly` + `SameSite=Lax` (+ HTTPS'te `Secure`).
-- Her HTML yanıtında güvenlik başlıkları ve nonce tabanlı Content-Security-Policy gönderilir.
-- Google Analytics yalnızca `analytics.ga4_id` ayarlıysa ve ziyaretçi KVKK çerez onayı verirse yüklenir.
-- `app.debug` canlı ortamda **kapalı** olmalıdır; hatalar `storage/logs/` altına yazılır.
-
-## Transfermarkt Senkronizasyonu
-
-İstatistik, kariyer ve takım sayfalarının tüm verisi **Transfermarkt API**’sinden
+İstatistik, kariyer ve takım sayfalarının tüm verisi **Transfermarkt API**'sinden
 (`transfermarkt.base_url`, varsayılan `https://tmapi-alpha.transfermarkt.technology/`) gelir.
 İstekler `Accept-Language: tr-TR` başlığıyla yapılır; böylece turnuva, mevki ve sakatlık adları
-Türkçe döner (ör. “UEFA Şampiyonlar Ligi”, “Santrafor”). Ayarlar `config/config.php` içindeki
-`transfermarkt` bölümündedir: `player_id` (8198), `language`, `timeout` (sn), isteğe bağlı
-`retries` (varsayılan 1) ve ek `headers`.
+Türkçe döner (ör. “UEFA Şampiyonlar Ligi”, “Santrafor”).
 
-**`tm-sync` görevi** (6 saatte bir; `src/Cron/Tasks/TransfermarktSyncTask.php`) sırasıyla şu uç
-noktaları okur ve tabloları doldurur:
+**`tm-sync` görevi** (6 saatte bir) sırasıyla şu uç noktaları okur ve tabloları doldurur:
 
 | Uç nokta | Tablo |
 |---|---|
@@ -174,125 +240,110 @@ noktaları okur ve tabloları doldurur:
 | `player/8198/market-value-history` | `market_values` |
 | `player/8198/national-career-history` | `national_career` |
 | `player/8198/injury` | `injuries` |
-| `clubs?ids[]=…` (25’erli), `club/{id}`, `competitions?ids[]=…` | `clubs`, `competitions` (ad, logo, renk, slug) |
+| `clubs?ids[]=…` (25'erli), `club/{id}`, `competitions?ids[]=…` | `clubs`, `competitions` (ad, logo, renk, slug) |
 
-- Ham JSON yanıtları `api_cache` tablosunda saklanır: istatistikler 30 dk, kulüp/turnuva bilgileri
-  7 gün taze sayılır; kulüp/turnuva satırları 30 günde bir yenilenir. API hata verirse (zaman
-  aşımı, 5xx, bozuk yanıt) **eski önbellek** kullanılır; hiç veri yoksa görev hata verir ve mevcut
-  veriler korunur.
-- Tüm yazma işlemleri tek bir veritabanı işleminde (`Database::upsertMany`) yapılır; görev tekrar
-  tekrar çalıştırılabilir (idempotent). API’den kalkan satırlar silinir; maç listesi yarıdan fazla
-  küçülürse (kesik yanıt) eski maçlar korunur.
-- Kariyer kulüplerinin adresleri sabittir: `/takimlar/sporting-cp`, `manchester-united`,
-  `real-madrid`, `juventus`, `al-nassr`, `portekiz`. Manchester United’ın iki dönemi
-  (2003–2009, 2021–2022) aynı sayfada ayrı ayrı gösterilir; dönem istatistikleri maç
-  kayıtlarından hesaplanır. Anlatı metinleri `content/career.php` dosyasından gelir.
-- İlk senkronizasyon yaklaşık 10 sn sürer (≈350 kulüp, 41 turnuva); sonraki çalıştırmalar
-  önbellek sayesinde çok daha kısadır.
-
-**Elle senkronizasyon:** Yönetim panelindeki Transfermarkt senkronizasyonu düğmesi (`POST /admin/islem/tm-sync`) ya da komut satırı:
-
-```bash
-php bin/cron.php tm-sync --force
-```
-
-Çıktı örneği: `1.653 maç, 179 sezon satırı, 11 takım, 41 turnuva, 12 transfer, 51 piyasa
-değeri, 6 milli takım, 30 sakatlık; 351 kulüp ve 41 turnuva bilgisi güncellendi (API 26,
-önbellek 0, eski önbellek 0, hata 0) – 9,2 sn`.
-
-**Sorun giderme**
-
-- *“Transfermarkt API yanıt vermedi ve önbellekte kullanılabilir veri yok”*: sunucunun dışarıya
-  HTTPS isteği yapabildiğini kontrol edin (`curl -I https://tmapi-alpha.transfermarkt.technology/player/8198`);
-  bazı paylaşımlı hostinglerde giden bağlantılar için destek talebi gerekir.
-- *“Eksik veri: …”* ile biten mesaj: ilgili uç nokta geçici olarak yanıt vermedi; diğer
-  tablolar güncellendi, eksik kısım bir sonraki çalıştırmada tamamlanır.
-- Ayrıntılar `storage/logs/YYYY-AA-GG.log` dosyasında `transfermarkt` kanalıyla kayıtlıdır
-  (her istek, süre ve boyut). Önbelleği tamamen sıfırlamak için `DELETE FROM api_cache;`
-  çalıştırıp görevi `--force` ile yeniden başlatın.
+- Ham JSON yanıtları `api_cache` tablosunda saklanır: istatistikler 30 dk, kulüp/turnuva bilgileri 7 gün taze
+  sayılır. API hata verirse (zaman aşımı, 5xx, bozuk yanıt) **eski önbellek** kullanılır; hiç veri yoksa görev
+  hata verir ve mevcut veriler korunur.
+- Tüm yazma işlemleri tek bir veritabanı işleminde yapılır; görev tekrar tekrar çalıştırılabilir (idempotent).
+  Maç listesi yarıdan fazla küçülürse (kesik yanıt) eski maçlar korunur.
+- Kulüp sayfalarının adresleri sabittir: `/takimlar/sporting-cp`, `manchester-united`, `real-madrid`,
+  `juventus`, `al-nassr`, `portekiz`. Manchester United'ın iki dönemi aynı sayfada ayrı gösterilir.
+- `/istatistikler/maclar` filtreleri: `?sezon=2016`, `?turnuva=CL`, `?sonuc=galibiyet|beraberlik|maglubiyet`,
+  `?durum=tumu` (oynamadığı maçlar dahil), `?sayfa=N`. Filtresiz liste ve sezon sayfaları indekslenir,
+  diğer filtre birleşimleri `noindex,follow` olur; geçersiz filtreler 301 ile temiz adrese yönlenir.
 - Sayfalar veri yokken de açılır (sıfırlar ve “ilk senkronizasyondan sonra” notu gösterilir).
+- Kulüp armaları ve portre `img.a.transfermarkt.technology` adresinden yüklenir; portre gösterildiğinde
+  “Fotoğraf: IMAGO / Transfermarkt” kaynak satırı eklenir.
 
-## Haber Sistemi (Spin)
+Elle senkronizasyon: panelde **Şimdi çalıştır** (Transfermarkt senkronizasyonu) ya da
+`php bin/cron.php tm-sync --force`. Örnek çıktı: `1.653 maç, 179 sezon satırı, 11 takım, 41 turnuva,
+12 transfer, 51 piyasa değeri, 6 milli takım, 30 sakatlık; 351 kulüp ve 41 turnuva bilgisi güncellendi
+(API 26, önbellek 0, eski önbellek 0, hata 0) – 9,2 sn`.
+
+## Haber sistemi (spin)
 
 Haberler tamamen otomatik hazırlanır; **yapay zekâ kullanılmaz**. Kaynak metinler Türkçe eş anlamlı
 kelime/ifade değiştirici (spinner) ve çoklu kaynak karıştırma ile yeniden yazılır, şablon cümlelerle
-zenginleştirilir ve **asla birebir kopya yayınlanmaz**.
+zenginleştirilir ve **asla birebir kopya yayınlanmaz**. Günde en fazla 10 haber yayınlanır.
 
 **Akış**
 
-1. `news-fetch` (30 dakikada bir): `config/news-sources.php` içindeki kaynaklar okunur — Bing Haberler
-   ve Google Haberler aramaları ile TRT Haber, Habertürk, CNN Türk, Sözcü, Ajansspor, Sporx
-   (windows-1254), A Spor, Star, Takvim, NTV Spor (Atom) spor akışları. Başlığında ya da özetinde
-   Cristiano Ronaldo geçen (Brezilyalı Ronaldo/Ronaldinho hariç), `news.max_age_hours` (48 saat) içindeki
-   haberler `news_items` tablosuna `pending` olarak yazılır. Aynı adres (url_hash) ikinci kez alınmaz;
-   son 72 saatteki haber/yazılarla aynı hikâyeyi anlatanlar (başlık benzerliği ≥ `news.similarity_threshold`
-   veya başlık+özet kök örtüşmesi) `duplicate` + `cluster:<ana kayıt>` notuyla bir **kümeye** bağlanır.
-   Google Haberler bağlantıları metin için açılamadığından yalnızca kümeleme kanıtı olarak tutulur
-   (`skipped`, `evidence-only`).
-2. `news-publish` (10 dakikada bir, her çalışmada en fazla 1 haber): günlük limit `news.daily_limit`
-   (varsayılan **10**, İstanbul takvim günü), iki haber arası en az `news.min_interval_minutes` (60 dk) ve
-   yayın penceresi `news.publish_window` (İstanbul saatiyle 07–23) kontrol edilir. Büyük, yeni ve metni
-   alınabilen küme önce seçilir.
+1. `news-fetch` (30 dakikada bir): `config/news-sources.php` içindeki 14 kaynak okunur — Bing Haberler
+   (3 arama) ve Google Haberler aramaları ile TRT Haber, Habertürk, CNN Türk, Sözcü, Ajansspor, Sporx
+   (windows-1254), A Spor, Star, Takvim, NTV Spor (Atom). Başlığında ya da özetinde Cristiano Ronaldo geçen
+   (Brezilyalı Ronaldo/Ronaldinho hariç), `news.max_age_hours` (48 saat) içindeki haberler `news_items`
+   tablosuna `pending` olarak yazılır. Aynı adres ikinci kez alınmaz; son 72 saatte aynı hikâyeyi anlatanlar
+   `duplicate` + `cluster:<ana kayıt>` notuyla bir **kümeye** bağlanır. Google Haberler bağlantıları metin
+   için açılamadığından yalnızca kümeleme kanıtı olarak tutulur (`skipped`, `evidence-only`).
+2. `news-publish` (10 dakikada bir, her çalışmada en fazla 1 haber): `spinner.enabled`, günlük limit
+   `news.daily_limit` (**10**, İstanbul takvim günü), iki haber arası en az `news.min_interval_minutes` (60 dk)
+   ve yayın penceresi `news.publish_window` (İstanbul saatiyle 07:00–23:00; başlangıç = bitiş ise gün boyu)
+   kontrol edilir. Büyük, yeni ve metni alınabilen küme önce seçilir.
 3. Metin: önce akıştaki tam metin, yoksa haber sayfası (JSON-LD `articleBody`, `<article>` paragrafları);
-   reklam, "İlgili haber", büyük harfli ara başlık ve anahtar kelime listeleri ayıklanır. Görseller asla
-   kaynaktan kullanılmaz; her yazı için 1200×630 OG görseli (GD, `public/og/`) üretilir.
+   reklam, “İlgili haber”, ara başlık ve anahtar kelime listeleri ayıklanır. Kaynak görselleri kullanılmaz; her
+   yazı için 1200×630 OG görseli (GD, `public/og/`) üretilir.
 4. Yazı: şablon giriş cümlesi + ana kaynağın cümleleri + kümedeki en fazla `spinner.max_sources` (3)
-   kaynaktan tekrar etmeyen cümleler (bağlaçlarla) + oynadığı kulüp için arka plan paragrafı
-   (`content/career.php`) + İstatistik cümleleri (Transfermarkt verisi) + kapanış cümlesi + tüm
-   kaynaklara bağlantı veren **"Kaynak:"** satırı. Başlık eş anlamlılar ve başlık kalıplarıyla yeniden
-   kurulur ve her kaynak başlığından farklı olmalıdır (benzerlik < 0,7).
+   kaynaktan tekrar etmeyen cümleler + oynadığı kulüp için arka plan paragrafı (`content/career.php`) +
+   Transfermarkt istatistik cümleleri + kapanış cümlesi + tüm kaynaklara bağlantı veren **“Kaynak:”** satırı.
+   Başlık eş anlamlılar ve kalıplarla yeniden kurulur ve her kaynak başlığından farklı olmalıdır (benzerlik < 0,7).
 
-**Spinner kuralları** (`src/Services/News/Spinner.php`, veri: `content/synonyms-tr.php`,
-`content/news-templates.php`): tırnak içleri (“…”, "…", ‘…’), korunan isimler (kulüpler, turnuvalar,
-kişiler; ek alsa bile: Al-Nassr’ın), sayılar, skorlar ve tarihler hiçbir zaman değiştirilmez; en uzun
-eşleşme önce (8 kelimeye kadar) aranır; cümle başı büyük harfi Türkçe kurallarla korunur; cümle
-ortasında büyük harfle yazılmış kelimeler (özel isim olabilir) ve kesme işaretli ekler atlanır;
-"mı/mi/mu/mü" ve "da/de" ekleri yeni kelimeye göre uyumlanır; rastgelelik haberin url_hash değeriyle
-tohumlandığı için aynı haber her seferinde aynı sonucu verir.
+**Spinner kuralları** (`src/Services/News/Spinner.php`): tırnak içleri (“…”, "…", ‘…’), korunan isimler
+(kulüpler, turnuvalar, kişiler; ek alsa bile: Al-Nassr'ın), sayılar, skorlar ve tarihler hiçbir zaman
+değiştirilmez; en uzun eşleşme önce aranır; cümle başı büyük harfi Türkçe kurallarla korunur; “mı/mi/mu/mü”
+ve “da/de” ekleri yeni kelimeye göre uyumlanır; rastgelelik haberin adres özetiyle tohumlandığı için aynı haber
+her seferinde aynı sonucu verir.
 
-**Özgünlük eşiği**: yazının kelime 3'lülerinden (shingle) hiçbir kaynakta geçmeyenlerin oranı
-`spinner.min_change_ratio` (varsayılan **%40**) altındaysa daha sert iki deneme daha yapılır (daha
-fazla eş anlamlı, yalnızca yeterince değişmiş cümleler); yine de altında kalırsa kayıt `failed` +
-`low-uniqueness` olur ve yayınlanmaz. En az `spinner.min_words` (180) kelime şartı vardır. Ronaldo'dan
-söz etmeyen kaynak metinleri `off-topic` ile elenir. Özgünlük yüzdesi `posts.uniqueness` alanında tutulur.
+**Özgünlük eşiği**: yazının kelime 3'lülerinden hiçbir kaynakta geçmeyenlerin oranı `spinner.min_change_ratio`
+(varsayılan **%40**) altındaysa daha sert iki deneme daha yapılır; yine de altında kalırsa kayıt `failed` +
+`low-uniqueness` olur ve yayınlanmaz. En az `spinner.min_words` (180) kelime şartı vardır (`too-short`);
+Ronaldo'dan söz etmeyen kaynak metinleri `off-topic`, kaynağa fazla benzeyen başlıklar `title-too-similar`,
+metni alınamayanlar `no-text` (3 kez yeniden denenir) notuyla elenir. Panelin Haber Kuyruğu sayfası bu
+nedenleri Türkçe açıklamalarıyla gösterir. Özgünlük yüzdesi `posts.uniqueness` alanında tutulur.
 
-**Ayarlar (yönetim paneli)**: `news.daily_limit`, `news.min_interval_minutes`, `news.index_spun_posts`
-(kapatılırsa otomatik yazılar `noindex` olur ve site haritasına girmez), `spinner.min_change_ratio`,
-`news.sources_disabled` (kapatılacak kaynak anahtarları), `indexnow.key`. Yeni kaynak eklemek için
-`config/config.php` içinde `'news' => ['sources' => ['anahtar' => ['name' => '…', 'type' => 'rss',
-'url' => 'https://…', 'filter' => true]]]` tanımlayın (aynı anahtar varsayılanı ezer).
+**Kopya içerik kapısı** (`src/Services/News/CopyCheck.php`): Google'ın spam politikası, eş anlamlı kelime
+değiştirilerek başka sitelerden alınan metni "kazınmış içerik" sayar ve bu tüm alan adının sıralamasını
+etkileyebilir. Bu yüzden yayın öncesi her yazı kaynaklarıyla yeniden ölçülür: kaynakla ortak kelime 6'lılarının
+oranı `spinner.max_shared_ngrams` (varsayılan **%10**) üstündeyse veya kaynaktan aynen alınmış en uzun dizi
+`spinner.max_verbatim_words` (varsayılan **12** kelime; 4+ kelimelik tırnak içi alıntılar sayılmaz) üstündeyse
+yazı yine yayınlanır ama **noindex** olur (site haritalarına ve IndexNow'a girmez). Haber Kuyruğu'ndaki notta
+ölçüm yazar; editör yazıya özgün bilgi ekleyip yazı formundaki "Arama motorlarında indekslensin" kutusunu işaretleyebilir.
 
-**IndexNow**: `indexnow.key` (8–128 karakter, harf/rakam/tire) girildiğinde anahtar
-`https://alanadiniz/indexnow-key.txt` adresinden sunulur ve her yeni yazı `api.indexnow.org` üzerinden
-Bing/Yandex'e bildirilir. Yerel/test adreslerinden bildirim yapılmaz.
+**Ayarlar (panel → Ayarlar)**: günlük limit, iki yayın arası süre, yayın penceresi, en fazla haber yaşı,
+asgari özgünlük oranı, otomatik haberlerin indekslenmesi (kapatılırsa yeni otomatik yazılar `noindex` olur ve
+site haritasına girmez), haber kaynaklarını tek tek açma/kapama (`news.sources_disabled`). Yeni kaynak eklemek
+için `config/config.php` içinde şunu tanımlayın (aynı anahtar varsayılanı ezer):
 
-**Sayfalar**: `/haberler` (12'li sayfalama, `?sayfa=2`), `/haber/{slug}` (NewsArticle JSON-LD, OG görseli,
-etiketler, kaynak kutusu, ilgili haberler, istatistik ve kulüp sayfası bağlantıları),
-`/haberler/etiket/{slug}` (3'ten az yazılı etiketler `noindex`), `/rss.xml` (son 30 indekslenebilir yazı).
+```php
+'news' => ['sources' => ['ornek' => ['name' => 'Örnek Spor', 'type' => 'rss', 'url' => 'https://ornek.com/spor.rss', 'filter' => true]]],
+```
+
+**Sayfalar**: `/haberler` (12'li sayfalama, `?sayfa=2`), `/haber/{slug}` (`NewsArticle` JSON-LD, OG görseli,
+etiketler, kaynak kutusu, ilgili haberler), `/haberler/etiket/{slug}` (3'ten az yazılı etiketler `noindex`),
+`/rss.xml` (son 30 indekslenebilir yazı).
 
 **Elle çalıştırma**: `php bin/cron.php news-fetch --force` ve `php bin/cron.php news-publish --force`
-(`--force` görev aralığını atlar; günlük limit/aralık/pencere yine uygulanır). Yönetim panelindeki
-"Şimdi yayınla" limitleri atlar ama özgünlük eşiğini atlamaz.
+(`--force` yalnızca görev aralığını atlar; günlük limit, yayın aralığı ve pencere yine uygulanır). Paneldeki
+“Şimdi yayınla” limitleri ve pencereyi atlar ama özgünlük eşiğini atlamaz.
 
 ## Videolar
 
-Video galerisi `/videolar` (kategori filtresi `?kategori=`, sayfalama `?sayfa=`, sayfa başına 24 video) ve
-video sayfaları `/video/{slug}` adresinde yayınlanır. Videolar YouTube’da kalır; sitede yalnızca küçük resim
-gösterilir, oynat düğmesine basıldığında **youtube-nocookie.com** oynatıcısı yüklenir (tıklamadan önce YouTube’a
-çerez/istek gitmez). Her video sayfasında `VideoObject` yapılandırılmış verisi, galeri sayfalarında `ItemList`
-ve tüm sayfalarda sayfa yolu (breadcrumb) bulunur.
+Video galerisi `/videolar` (kategori filtresi `?kategori=goller|mac-ozetleri|roportajlar|antrenman|belgesel|ur-cristiano|genel`,
+sayfalama `?sayfa=`, sayfa başına 24 video) ve video sayfaları `/video/{slug}` adresindedir. Videolar
+YouTube'da kalır; sitede yalnızca küçük resim gösterilir, oynat düğmesine basıldığında **youtube-nocookie.com**
+oynatıcısı yüklenir (tıklamadan önce YouTube'a çerez gitmez). Video sayfalarında `VideoObject`, galeride
+`ItemList` yapılandırılmış verisi bulunur.
 
-**Kurulumda gelen videolar.** Yükleyici (`php bin/install.php`) UEFA, FIFA, Real Madrid, Manchester United,
-Juventus, Al Nassr ve UR · Cristiano kanallarından seçilmiş 30 ikonik videoyu Türkçe başlık ve açıklamalarla
-ekler (`src/Install/Seeders/VideoSeeder.php`). Tekrar çalıştırmak güvenlidir: yalnızca eksik videolar eklenir,
-yönetim panelinde düzenlediğiniz videolara dokunulmaz.
-
-**Otomatik senkronizasyon (`videos-sync`, 3 saatte bir).** Cron görevi aşağıdaki resmî kanalların herkese açık
-RSS akışlarını okur (API anahtarı gerekmez, kanal başına son 15 video):
+- **Kurulumda gelen videolar:** 30 ikonik video Türkçe başlık ve açıklamalarla eklenir
+  (`src/Install/Seeders/VideoSeeder.php`); kurulumu tekrar çalıştırmak yalnızca eksikleri ekler.
+- **Otomatik senkronizasyon (`videos-sync`, 3 saatte bir):** aşağıdaki resmî kanalların RSS akışları okunur
+  (API anahtarı gerekmez, kanal başına son 15 video). *Filtre = Evet* olan kanallardan yalnızca başlığında
+  (veya açıklamanın ilk paragrafında) Ronaldo / CR7 / Cristiano geçen videolar alınır; yalnızca Arapça başlıklı
+  videolar ve başka sitelerde oynatılmasına izin verilmeyenler atlanır.
 
 | Kanal | Kanal kimliği | Filtre |
 |---|---|---|
-| UR · Cristiano | `UCtxD0x6AuNNqdXO9Wp5GHew` | Hayır (tüm videolar) |
+| UR · Cristiano | `UCtxD0x6AuNNqdXO9Wp5GHew` | Hayır |
 | Al Nassr FC | `UCHEQtltsiDd3p8ga-5nC-ow` | Evet |
 | Federação Portuguesa de Futebol | `UCsIoK3XP-cVcpoCC_SdjZdg` | Evet |
 | Real Madrid | `UCWV3obpZVGgJ3j9FVhEjF2Q` | Evet |
@@ -302,340 +353,285 @@ RSS akışlarını okur (API anahtarı gerekmez, kanal başına son 15 video):
 | UEFA | `UCyGa1YEx9ST66rYrJTGIKOw` | Evet |
 | FIFA | `UCpcTrCXblq78GZrTUTLWeBw` | Evet |
 
-- *Filtre = Evet* olan kanallardan yalnızca başlığında (veya açıklamanın ilk paragrafında) Ronaldo / CR7 /
-  Cristiano geçen videolar alınır; “Ronaldo Nazário” videoları elenir. Yalnızca Arapça başlıklı videolar alınmaz.
-- Başka sitelerde oynatılmasına izin verilmeyen videolar (YouTube oEmbed 401) atlanır ve bir hafta boyunca tekrar
-  denenmez.
-- Kategoriler başlık ve açıklamadaki anahtar kelimelerle otomatik belirlenir (Türkçe, İngilizce, Portekizce,
-  İspanyolca, İtalyanca, Arapça): **Goller** (gol, goal, frikik, hat-trick, rövaşata…), **Maç Özetleri** (özet,
-  highlights, resumo…), **Röportajlar** (röportaj, interview, basın toplantısı…), **Antrenman** (antrenman,
-  training, idman…), **Belgesel** (belgesel, documentary, film…); UR · Cristiano kanalının tüm videoları
-  **UR · Cristiano** kategorisine, eşleşmeyenler **Genel** kategorisine girer. Shorts videoları da alınır.
-- Var olan videolarda yalnızca izlenme sayısı (ve eksikse süre) güncellenir; panelde değiştirdiğiniz başlık,
-  açıklama ve kategoriler korunur. Yeni videolar IndexNow anahtarı tanımlıysa Bing/Yandex’e bildirilir.
+- **Kanal eklemek / kapatmak:** `config/config.php` içindeki `youtube.channels` listesi bu varsayılanlarla
+  birleştirilir; aynı kimlik varsayılanı ezer, `['id' => 'UC…', 'enabled' => false]` kanalı kapatır,
+  `'filter' => true` yalnızca Ronaldo videolarını alır. Kanal kimliğini
+  `https://www.youtube.com/feeds/videos.xml?channel_id=UC…` adresinin video listesi döndürmesiyle doğrulayın.
+- **Kategoriler** başlıktaki anahtar kelimelerle (Türkçe, İngilizce, Portekizce, İspanyolca, İtalyanca, Arapça)
+  otomatik belirlenir: Goller, Maç Özetleri, Röportajlar, Antrenman, Belgesel, UR · Cristiano, Genel.
+- **İsteğe bağlı YouTube Data API v3:** panel → Ayarlar → YouTube API anahtarı girilirse senkronizasyon
+  `youtube.search_query` ile son 14 günü de arar ve süre/izlenme bilgilerini alır (bir çalıştırma ≈ 100–110
+  kota birimi; günlük ücretsiz kota 10.000). Kota dolarsa RSS + oEmbed yöntemine dönülür.
+- **Elle video eklemek:** panel → Videolar → “Video ekle” alanına YouTube bağlantısını (`watch?v=`,
+  `youtu.be/`, `/shorts/`, `/embed/`, `/live/`) ya da 11 karakterlik kimliği yapıştırın. Senkronizasyonla
+  gelen bir videoyu kalıcı kaldırmak için silmek yerine “Gizli” durumuna alın.
+- **Adresler** başlıktan üretilir ve sonuna video kimliğinden kısa bir parça eklenir
+  (`/video/…-cjlcr`); başlık değişse bile eski adres yeni adrese 301 ile yönlenir.
 
-Elle çalıştırmak için: `php bin/cron.php videos-sync --force` (veya yönetim panelindeki “Video
-senkronizasyonu” düğmesi).
-
-**Kanal eklemek / kapatmak.** `config/config.php` içindeki `youtube.channels` listesi varsayılanlarla
-birleştirilir; aynı kimlik varsayılanı ezer, `'enabled' => false` kanalı kapatır. Örnek:
-
-```php
-'youtube' => [
-    'api_key' => '',
-    'channels' => [
-        ['id' => 'UCtxD0x6AuNNqdXO9Wp5GHew', 'name' => 'UR · Cristiano', 'filter' => false],
-        ['id' => 'UCnJj6L93JX3Jrhzv81ayywA', 'name' => 'Sporting CP', 'filter' => true],
-        ['id' => 'UCpcTrCXblq78GZrTUTLWeBw', 'enabled' => false],   // FIFA kanalını kapat
-    ],
-    'search_query' => 'Cristiano Ronaldo',
-],
-```
-
-Bir kanalın kimliğini (`UC…`) bulmak için kanal sayfasının kaynağında `"externalId"` değerine bakabilir ya da
-`https://www.youtube.com/feeds/videos.xml?channel_id=UC…` adresinin video listesi döndürdüğünü kontrol edebilirsiniz.
-
-**İsteğe bağlı YouTube Data API v3.** Yönetim paneli → Ayarlar’dan (veya `youtube.api_key`) bir API anahtarı
-girerseniz senkronizasyon ayrıca `youtube.search_query` ile son 14 günün videolarını arar (Türkçe sonuçlar,
-Türkiye bölgesi, yalnızca yerleştirilebilir videolar) ve tüm yeni videoların süresini, izlenme sayısını ve
-yerleştirme iznini API’den alır. Anahtar Google Cloud Console’da “YouTube Data API v3” etkinleştirilerek
-oluşturulur; günlük ücretsiz kota (10.000 birim) 3 saatlik senkronizasyon için fazlasıyla yeterlidir
-(bir çalıştırma ≈ 100–110 birim). Kota dolarsa sistem otomatik olarak RSS + oEmbed yöntemine döner.
-
-**Elle video eklemek.** Yönetim paneli → Videolar → “Video ekle” alanına herhangi bir YouTube bağlantısını
-(`watch?v=`, `youtu.be/`, `/shorts/`, `/embed/`, `/live/`) ya da 11 karakterlik video kimliğini yapıştırın.
-API anahtarı yoksa başlık, kanal ve küçük resim YouTube oEmbed’den alınır (açıklamayı panelden ekleyebilirsiniz;
-yayın tarihi yerine eklenme tarihi gösterilir). Aynı video ikinci kez eklenmez.
-
-**Adresler.** Video adresleri başlıktan üretilir ve sonuna video kimliğinden kısa bir parça eklenir
-(`/video/ronaldonun-juventusa-attigi-efsane-rovasata-golu-2018-cjlcr`). Başlık sonradan değişse bile kimlik parçası
-aynı kaldığı için eski adresler yeni adrese 301 ile yönlenir.
-
-## Forma Mağazası ve Ödeme
+## Forma Mağazası ve ödeme
 
 Mağaza sayfaları herkese açıktır ve arama motorlarında listelenir; **sipariş alma varsayılan olarak
-kapalıdır** (ürün sayfalarında “Yakında satışta” gösterilir). Siparişler yönetim panelindeki
-**Ödeme Ayarları** sayfasından açılır. Ödeme yöntemleri: **PayTR**, **iyzico**, **Shopier** ve
-**Havale/EFT**.
+kapalıdır**: ürün sayfalarında sipariş formu yerine “Yakında satışta” gösterilir ve sipariş isteği 403 döner.
 
-> **Önemli:** Bu sitedeki formalar kulüplerin renklerinden esinlenen özgün çizimlerdir. Kulüp arması,
-> sponsor logosu veya telifli fotoğraf kullanılmaz. Açıklamalarda “orijinal” ya da “lisanslı” ifadesi
-> geçmez; ürünleriniz gerçekten öyleyse bunu yönetim panelinden kendiniz ekleyin.
+> **Önemli:** Formalar kulüplerin renklerinden esinlenen özgün çizimlerdir. Kulüp arması, sponsor logosu veya
+> telifli fotoğraf kullanılmaz; açıklamalarda “orijinal” ya da “lisanslı” ifadesi geçmez. Ürünleriniz gerçekten
+> öyleyse bunu panelden kendiniz ekleyin.
 
 ### Ürünler
 
-- **Örnek katalog:** Kurulum, `ProductSeeder` ile Ronaldo’nun oynadığı her kulübün ve dönemin formasını
-  ekler. Toplam 11 forma vardır:
-  - Sporting CP 2002–03 (#28)
-  - Manchester United 2003–04, 2007–08 ve 2021–22
-  - Real Madrid 2013–14 ve 2016–17
-  - Juventus 2018–19
-  - Al-Nassr 2025–26 iç saha ve deplasman
-  - Portekiz Euro 2016 ve 2026
-- **Ortak özellikler:** Fiyatlar 1.499,90 ile 2.299,90 TL arasındadır. Bedenler S–XXL ve 6–13 yaş
-  çocuk bedenleridir. Her formada RONALDO 7 isim-numara baskısı seçeneği vardır (+250 TL).
-- **Kurulumu tekrar çalıştırmak:** Seeder ürünleri adreslerine (slug) göre ekler. Var olan bir ürüne
-  dokunmaz, bu yüzden panelde yaptığınız değişiklikler korunur.
-- **Forma çizimleri:** Çizimler `public/assets/img/kits/{slug}.svg` (arka, RONALDO 7 baskılı) ve
-  `{slug}-on.svg` (ön) dosyalarıdır. Paylaşım görselleri `public/og/forma-{slug}.png` olarak GD ile
-  üretilir; eksik olanlar kurulumda yeniden oluşturulur.
-- **Yönetim** (`/admin/urunler`): Ürünleri ekleyip düzenleyebilir, yayından kaldırabilir, sıralayabilir
-  ve silebilirsiniz. Ürün formunda şunlar bulunur:
-  - fiyat ve eski fiyat
-  - yetişkin ve çocuk bedenleri
-  - baskı ücreti
-  - stok (boş bırakılırsa “sipariş üzerine” satılır, sayı girilirse her siparişte düşer)
-  - fotoğraf yükleme (JPG/PNG/WebP, en fazla 2 MB)
-  - renklerden forma çizimi üretme
-- **Yüklenen fotoğraflar:** `public/uploads/products/` klasörüne rastgele bir adla kaydedilir. Dosya
-  türü içeriğinden kontrol edilir. Klasörün `.htaccess` dosyası betik çalıştırılmasını engeller.
-  Klasörün yazılabilir olması gerekir (`chmod 775`).
+- Kurulum Ronaldo'nun oynadığı her kulüp ve dönemden 11 forma ekler (Sporting CP 2002–03; Manchester United
+  2003–04, 2007–08, 2021–22; Real Madrid 2013–14, 2016–17; Juventus 2018–19; Al-Nassr 2025–26 iç saha ve
+  deplasman; Portekiz Euro 2016 ve 2026). Fiyatlar 1.499,90–2.299,90 TL, bedenler S–XXL ve 6–13 yaş, RONALDO 7
+  baskı seçeneği +250 TL. Panelden silinen/yeniden adlandırılan ürünler kurulum tekrarlanınca geri gelmez.
+- Panel → **Ürünler** (`/admin/urunler`): fiyat, eski fiyat, bedenler, baskı ücreti, stok (boş = sipariş üzerine),
+  fotoğraf yükleme (JPG/PNG/WebP, en fazla 2 MB; `public/uploads/products/`, betik çalıştırma kapalı) ya da
+  renklerden forma çizimi üretme.
+
+### Siparişleri açmak (panel → Ödeme Ayarları, `/admin/odeme-ayarlari`)
+
+1. **Mağaza** bölümü: kargo ücreti, WhatsApp numarası (“Haber ver” bağlantısı), bildirim e-postası.
+2. **Satıcı bilgileri**: unvan, adres, telefon, e-posta, vergi dairesi/no, MERSİS. Bu bilgiler
+   `/mesafeli-satis-sozlesmesi`, `/on-bilgilendirme-formu` ve `/iptal-ve-iade` sayfalarında görünür (mağaza
+   açıkken bu sayfalar alt bilgide ve site haritasında da yer alır). Boş alanlar [köşeli parantez] ile
+   gösterilir. Metinler şablondur; satışa başlamadan önce bir hukuk danışmanına kontrol ettirin.
+3. En az bir ödeme yöntemini **etkinleştirin ve bilgilerini eksiksiz girin** (aşağıdaki tablo). Bir yöntem
+   ancak hem açık hem yapılandırılmış olduğunda ödeme seçeneği olarak görünür.
+4. **Sipariş alınsın** kutusunu işaretleyip kaydedin. Ürün sayfasında sipariş formu belirir; kullanılabilir hiçbir
+   ödeme yöntemi yoksa panel uyarır ve sayfalar “Yakında satışta” olarak kalır. Kapatmak için kutunun işaretini
+   kaldırıp kaydedin.
+
+Gizli anahtarlar panelde maskeli (`••••••••abcd`) gösterilir; alan boş bırakılırsa kayıtlı değer korunur,
+“Kayıtlı değeri sil” kutusu değeri kaldırır. Ödeme seçeneklerinin sırası `shop.payment_methods` ile belirlenir.
+
+| Yöntem | Panelden girilecek bilgiler | Sağlayıcı paneline girilecek geri dönüş (callback) adresi | Test |
+|---|---|---|---|
+| **PayTR** (iFrame API) | Mağaza no, Mağaza parolası, Mağaza gizli anahtarı | **Bildirim URL:** `https://cr7.com.tr/odeme/paytr/bildirim` (PayTR Paneli › Destek & Kurulum › Ayarlar) | “Test modu” (varsayılan kapalı; açıkken panelde uyarı görünür, kapalıyken `test_mode=1` bildirimleri ödeme sayılmaz) |
+| **iyzico** (Ödeme Formu) | API anahtarı, Güvenlik anahtarı | Girmeye gerek yok: `https://cr7.com.tr/odeme/iyzico/donus` her istekte `callbackUrl` olarak gönderilir | “Sandbox” (sandbox-merchant.iyzipay.com anahtarlarıyla) |
+| **Shopier** | API kullanıcı, API şifre, web sitesi indeksi (Entegrasyonlar › Modül Yönetimi) | **Geri Dönüş URL:** `https://cr7.com.tr/odeme/shopier/donus` (seçtiğiniz indeks için) | Test ortamı yok; düşük tutarlı ürünle deneyin |
+| **Havale / EFT** | Banka, alıcı adı, IBAN (TR, mod-97 doğrulamalı) | — | — |
+
+Müşteri sonuç sayfası `https://cr7.com.tr/odeme/sonuc/{anahtar}`, sipariş takibi
+`https://cr7.com.tr/siparis/{anahtar}` adresindedir (ikisi de `noindex`, önbelleğe alınmaz).
 
 ### Sipariş akışı
 
-1. Ürün sayfasındaki form beden, baskı, adet, teslimat bilgileri, ödeme yöntemi ve iki onay ister:
-   KVKK aydınlatma metni ile Ön Bilgilendirme Formu + Mesafeli Satış Sözleşmesi.
-2. Form gönderildiğinde (`POST /forma/{slug}/siparis`) şu korumalar uygulanır:
-   - CSRF denetimi
-   - görünmez bir tuzak alanı (honeypot)
-   - aynı IP’den saatte en fazla 5 sipariş
-3. Fiyat sunucuda yeniden hesaplanır; formdan gelen tutarlar dikkate alınmaz. Toplam şöyle bulunur:
-   (ürün fiyatı + baskı) × adet + kargo.
-4. Sipariş `CR7-XXXXXX` numarasıyla kaydedilir ve 32 karakterlik gizli bir erişim anahtarı üretilir.
-   Müşteri `/odeme/{anahtar}` adresine yönlendirilir.
-5. Ödeme sonucu `/odeme/sonuc/{anahtar}` sayfasında, sipariş takibi `/siparis/{anahtar}` sayfasında
-   görünür. Bu sayfalar `noindex` olarak işaretlenir ve önbelleğe alınmaz.
-6. Sipariş alınınca ve ödeme onaylanınca, ayarlarda bir bildirim adresi girdiyseniz e-posta gönderilir
-   (PHP `mail()`).
-7. Siparişleri `/admin/siparisler` sayfasında yönetirsiniz:
-   - durum, ödeme durumu ve yönteme göre filtreleme
-   - sipariş numarası, telefon, ad ya da e-posta ile arama
-   - durum değiştirme (Yeni → Onaylandı → Hazırlanıyor → Kargoda → Tamamlandı / İptal)
-   - kargo takip numarası girme (müşteri sayfasında görünür)
-   - “Havale ödemesi alındı” ile onaylama ve iade işaretleme
+1. Ürün sayfasındaki form beden, baskı, adet, teslimat bilgileri, ödeme yöntemi ve iki onay ister (KVKK
+   aydınlatma metni; Ön Bilgilendirme Formu + Mesafeli Satış Sözleşmesi).
+2. `POST /forma/{slug}/siparis`: CSRF denetimi, görünmez tuzak alanı (honeypot), aynı IP'den saatte en fazla
+   5 sipariş. Fiyat sunucuda yeniden hesaplanır: (ürün + baskı) × adet + kargo.
+3. Sipariş `CR7-XXXXXX` numarası ve 32 karakterlik gizli erişim anahtarıyla kaydedilir, müşteri
+   `/odeme/{anahtar}` sayfasına yönlenir (PayTR iframe, iyzico formu, Shopier yönlendirmesi ya da IBAN bilgisi).
+4. Ödeme bildirimleri imzayla doğrulanır, tek seferliktir ve tutar sipariş toplamıyla karşılaştırılır; ödenmiş
+   bir sipariş sonradan “başarısız” sayılmaz. Bildirim e-postası (ayarlıysa) PHP `mail()` ile gönderilir.
+5. Panel → **Siparişler**: filtreleme, arama, durum değiştirme (Yeni → Onaylandı → Hazırlanıyor → Kargoda →
+   Tamamlandı / İptal), kargo takip numarası, “Havale ödemesi alındı” onayı.
 
-### Siparişleri açmak (`/admin/odeme-ayarlari`)
+Teknik ayrıntılar (SDK kullanılmaz; düz curl + `hash_hmac`, karşılaştırmalar `hash_equals`):
 
-1. **Mağaza** bölümünü doldurun:
-   - kargo ücreti
-   - WhatsApp numarası (“Haber ver” bağlantısı için)
-   - bildirim e-postası
-2. **Satıcı bilgileri** bölümünü doldurun: unvan, adres, telefon, e-posta, vergi dairesi/no ve MERSİS.
-   Bu bilgiler yasal sayfalarda görünür:
-   - `/mesafeli-satis-sozlesmesi`
-   - `/on-bilgilendirme-formu`
-   - `/iptal-ve-iade`
+- **PayTR:** token `POST https://www.paytr.com/odeme/api/get-token`; iframe
+  `https://www.paytr.com/odeme/guvenli/{token}`; bildirim imzası
+  `base64(HMAC-SHA256(merchant_oid.merchant_salt.status.total_amount, merchant_key))`; yanıt düz metin `OK`.
+- **iyzico:** `Authorization: IYZWSv2 …` (resmî SDK'daki `IyziAuthV2Generator` ile aynı);
+  `POST /payment/iyzipos/checkoutform/initialize/auth/ecom`; dönüşte sonuç
+  `…/checkoutform/auth/ecom/detail` ile sorgulanır, `paymentStatus=SUCCESS`, `fraudStatus=1`, `basketId`,
+  `price` ve yanıt imzası doğrulanır. `identityNumber` için `11111111111` gönderilir (gerçek üye işyeri hesabıyla
+  teyit edin).
+- **Shopier:** “Shopier ile Ödeme Al” API modülü (API kullanıcı/şifre); imzalı form
+  `https://www.shopier.com/ShowProduct/api_pay4.php` adresine gönderilir; dönüş imzası
+  `base64(HMAC-SHA256(random_nr.platform_order_id, api_secret))`. Bu imza `status` alanını kapsamaz ve dönüş
+  müşterinin tarayıcısından gelir; bu yüzden Shopier siparişleri **otomatik “Ödendi” olmaz**: “başarılı” dönüşte
+  sipariş “Bekliyor”da kalır, size “Ödeme kontrolü gerekiyor” e-postası gider. Ödemeyi Shopier satıcı panelinde
+  gördükten sonra sipariş sayfasında “Ödeme alındı olarak işaretle” ile onaylayın. Her imzalı dönüş bir kez işlenir.
+- **CSP:** ödeme sayfası yalnızca ilgili sağlayıcıya (ve bankanın 3-D Secure sayfasına) izin veren ek kurallarla açılır.
 
-   Boş bıraktığınız alanlar sayfalarda [köşeli parantez] içinde görünür. Metinler şablondur;
-   yayına almadan önce bir hukuk danışmanına kontrol ettirin.
-3. En az bir ödeme yöntemini **etkinleştirin ve bilgilerini girin**. Bir yöntem, ödeme sayfasında ancak
-   hem açık hem de eksiksiz yapılandırılmış olduğunda görünür.
-4. **Sipariş alınsın** kutusunu işaretleyin. Kullanılabilir hiçbir ödeme yöntemi yoksa mağaza kapalı
-   kalır.
+## Yönetim paneli
 
-Gizli anahtarlar panelde maskelenmiş olarak (`••••••••abcd`) gösterilir. Alanı boş bırakarak
-kaydederseniz kayıtlı değer korunur; silmek için “Kayıtlı değeri sil” kutusunu işaretleyin. Ödeme
-yöntemlerinin ödeme sayfasındaki sırası `config.php` içindeki `shop.payment_methods` ile belirlenir.
-
-| Yöntem | Panelden alınacak bilgiler | Sağlayıcı paneline girilecek adres | Test |
-|---|---|---|---|
-| **PayTR** (iFrame API) | Mağaza no, Mağaza parolası, Mağaza gizli anahtarı | **Bildirim URL:** `https://cr7.com.tr/odeme/paytr/bildirim` (PayTR Paneli › Destek & Kurulum › Ayarlar) | “Test modu” (`test_mode=1`) |
-| **iyzico** (Ödeme Formu) | API anahtarı, Güvenlik anahtarı | Gerekmez. `callbackUrl` her istekte `https://cr7.com.tr/odeme/iyzico/donus` olarak gönderilir. | “Sandbox”: `sandbox-api.iyzipay.com` (sandbox-merchant.iyzipay.com anahtarlarıyla) |
-| **Shopier** | API kullanıcı, API şifre, web sitesi indeksi (Entegrasyonlar › Modül Yönetimi) | **Geri Dönüş URL:** `https://cr7.com.tr/odeme/shopier/donus` (seçtiğiniz indeks için) | Shopier’de test ortamı yoktur; düşük tutarlı bir ürünle deneyin. |
-| **Havale / EFT** | Banka, alıcı adı, IBAN (TR, mod-97 ile doğrulanır) | — | — |
-
-### Ödeme sağlayıcıları — teknik ayrıntılar
-
-Hiçbir SDK kullanılmaz; bağlantılar düz curl ve `hash_hmac` ile kurulur. Tüm imza karşılaştırmaları
-`hash_equals` ile yapılır. Ödeme bildirimleri başka bir siteden gelen POST istekleridir: oturum
-çerezi gelmediği için CSRF denetiminden muaftırlar ve siparişi oturumdan değil sipariş numarasından
-bulurlar. Kimlikleri ödeme sağlayıcısının imzasıyla doğrulanır. Ödeme kaydı tek seferliktir: aynı
-bildirim tekrar gelirse bir şey değişmez, ödenmiş bir sipariş sonradan “başarısız” sayılmaz. Gelen
-tutar sipariş toplamıyla karşılaştırılır; uyuşmazsa sipariş ödenmiş sayılmaz. `payment_payload`
-alanında sağlayıcı yanıtının yalnızca güvenli alanları saklanır; kart bilgisi ve imzalar saklanmaz.
-
-- **PayTR iFrame API** — [1. adım](https://dev.paytr.com/iframe-api/iframe-api-1-adim),
-  [2. adım](https://dev.paytr.com/iframe-api/iframe-api-2-adim)
-  - **Token isteği:** `POST https://www.paytr.com/odeme/api/get-token` adresine gönderilir.
-  - **paytr_token:**
-    `base64(HMAC-SHA256(merchant_id.user_ip.merchant_oid.email.payment_amount.user_basket.no_installment.max_installment.currency.test_mode.merchant_salt, merchant_key))`
-  - **user_basket:** `[[ad, "fiyat", adet]]` dizisinin JSON’unun base64 hâlidir.
-  - **Tutar:** kuruş olarak gönderilir (`payment_amount`).
-  - **Sipariş numarası:** `merchant_oid` yalnızca harf ve rakam içerebildiği için `CR7AB12CD`
-    biçiminde gönderilir.
-  - **Ödeme formu:** iframe `https://www.paytr.com/odeme/guvenli/{token}` adresinden açılır.
-  - **Bildirim doğrulaması:** `base64(HMAC-SHA256(merchant_oid.merchant_salt.status.total_amount, merchant_key))`
-  - **Bildirim yanıtı:** Sunucu yalnızca düz metin olarak `OK` döner; aynı bildirim tekrar gelirse de `OK`.
-  - **Tutar kontrolü:** `payment_amount` sipariş toplamıyla karşılaştırılır.
-- **iyzico Ödeme Formu** —
-  [kimlik doğrulama](https://docs.iyzico.com/on-hazirliklar/kimlik-dogrulama/hmacsha256-kimlik-dogrulama),
-  [başlatma](https://docs.iyzico.com/odeme-metotlari/odeme-formu/cf-entegrasyonu/cf-baslatma),
-  [sorgulama](https://docs.iyzico.com/odeme-metotlari/odeme-formu/cf-entegrasyonu/cf-sorgulama),
-  [yanıt imzası](https://docs.iyzico.com/en/advanced/response-signature-validation)
-  - **Yetkilendirme başlığı:**
-    `Authorization: IYZWSv2 base64("apiKey:…&randomKey:…&signature:" + hex(HMAC-SHA256(randomKey + uriPath + jsonBody, secretKey)))`
-    Rastgele anahtar ayrıca `x-iyzi-rnd` başlığında gönderilir. Bu başlık, iyzico’nun resmi PHP
-    SDK’sındaki `IyziAuthV2Generator` ile aynı sonucu verir.
-  - **Başlatma isteği:** `POST /payment/iyzipos/checkoutform/initialize/auth/ecom`. `basketId` ve
-    `conversationId` olarak sipariş numarası kullanılır.
-  - **Fiyat biçimi:** SDK ile aynıdır, örneğin `1499.9`.
-  - **Sepet:** Ürünler ve kargo satır olarak eklenir; satırların toplamı `price` değerine eşittir.
-  - **TC kimlik:** TC kimlik numarası istenmez; `identityNumber` alanına iyzico’nun kabul ettiği
-    `11111111111` yazılır.
-  - **Ödeme formu:** `checkoutFormContent` betiği CSP nonce’u ile sayfaya basılır. Yedek olarak
-    `paymentPageUrl` bağlantısı da gösterilir.
-  - **Dönüş:** iyzico `token` değerini `/odeme/iyzico/donus` adresine gönderir. Sonuç sunucudan
-    `POST /payment/iyzipos/checkoutform/auth/ecom/detail` ile sorgulanır. Ödeme kabulü için:
-    - `paymentStatus=SUCCESS`
-    - `fraudStatus=1`
-    - `basketId` siparişle aynı
-    - `price` sipariş toplamıyla aynı
-    - yanıt imzası doğru: `paymentStatus:paymentId:currency:basketId:conversationId:paidPrice:price:token`
-- **Shopier** — Shopier’in yeni REST API’si ([developer.shopier.com](https://developer.shopier.com/),
-  Kişisel Erişim Anahtarı ile çalışır) yalnızca kendi Shopier mağazanızı yönetir (ürün, sipariş,
-  webhook); harici bir sitedeki sipariş için ödeme sayfası oluşturamaz. Bu nedenle Shopier’in resmi
-  PHP SDK’sında ([github.com/shopier/api](https://github.com/shopier/api) →
-  [erkineren/shopier](https://github.com/erkineren/shopier)) kullanılan “Shopier ile Ödeme Al” API
-  modülü tercih edildi. Bu modül API kullanıcı ve API şifre ile çalışır.
-  - **Ödeme formu:** İmzalı form `https://www.shopier.com/ShowProduct/api_pay4.php` adresine
-    otomatik gönderilir.
-  - **Form imzası:** `base64(HMAC-SHA256(random_nr.platform_order_id.total_order_value.currency, api_secret))`.
-    Para birimi kodu: 0 = TL.
-  - **Dönüş imzası:** `base64(HMAC-SHA256(random_nr.platform_order_id, api_secret))`. Durum
-    (`status`) değeri `success` ya da `failed` olur.
-  - **Tutar:** Dönüş bilgisinde tutar yer almaz, ancak tutar giden formun imzasına dahil olduğu için
-    değiştirilemez.
-- **CSP:** Ödeme sayfaları, ilgili sağlayıcıya izin veren ek kurallarla (`Response::withCsp`) açılır:
-  - PayTR: `frame-src https://www.paytr.com` ve bankanın 3-D Secure sayfası için `https:`
-  - iyzico: `script/style/connect/font-src https://*.iyzipay.com`; ayrıca 3-D Secure için
-    `frame-src` ve `form-action https:`
-  - Shopier: `form-action https://www.shopier.com`
-
-### Ayar anahtarları (`settings` tablosu, `config.php` değerlerini geçersiz kılar)
-
-- **Mağaza:**
-  - `shop.enabled` · `shop.orders_enabled` · `shop.shipping_fee` · `shop.whatsapp` · `shop.notify_email`
-  - Yasal sayfalar için: `shop.company_name` · `shop.company_address` · `shop.company_phone` ·
-    `shop.company_email` · `shop.company_tax_office` · `shop.company_tax_number` · `shop.company_mersis`
-- **Ödeme:**
-  - PayTR: `payment.paytr.{enabled,merchant_id,merchant_key,merchant_salt,test_mode}`
-  - iyzico: `payment.iyzico.{enabled,api_key,secret_key,sandbox}`
-  - Shopier: `payment.shopier.{enabled,api_key,api_secret,website_index}`
-  - Havale/EFT: `payment.havale.{enabled,bank_name,account_holder,iban}`
-
-### SEO
-
-- **Mağaza sayfası:** `/forma-magazasi` ve kulüp filtreleri (`?takim=336` gibi) arama motorlarında
-  listelenir; her birinin kendine ait başlığı, açıklaması, canonical adresi ve ItemList yapılandırılmış
-  verisi vardır. Bilinmeyen bir kulüp filtresi 404 döner.
-- **Ürün sayfaları:** Product yapılandırılmış verisi içerir:
-  - marka olarak kulüp adı
-  - Offer (fiyat, TRY)
-  - stok durumu: sipariş kapalıyken `OutOfStock`, açıkken `PreOrder`/`InStock`
-  - 14 günlük iade politikası
-  - PNG ve SVG görseller
-
-  Ayrıca `og:type=product` ve `product:price:*` etiketleri bulunur.
-- **Site haritası:** Ürün site haritası için hazır olan `ProductRepository::forSitemap()` kullanılır.
-
-Test: `php bin/test.php Shop` (PayTR, iyzico ve Shopier imzalarını openssl ile bağımsız hesaplanmış
-örneklerle sınar; fiyatlandırma, doğrulama, sipariş kapalıyken 403 ve IP sınırını da kontrol eder).
-
-## Yönetim Paneli
-
-Yönetim paneli `https://cr7.com.tr/admin` adresindedir (arama motorlarına kapalıdır: `noindex` +
-`X-Robots-Tag`, robots.txt'de `/admin` engelli). İlk yönetici `php bin/install.php --password=…` ile oluşturulur.
-
-**Giriş ve güvenlik**
-
-- Giriş: `/admin/giris`. Hata mesajları geneldir (“Kullanıcı adı veya şifre hatalı.”). Aynı IP'den
-  15 dakikada 5 hatalı denemeden sonra giriş geçici olarak kilitlenir. Başarılı girişte oturum kimliği ve
-  CSRF anahtarı yenilenir; giriş öncesi açılmak istenen panel sayfasına geri dönülür.
-- Oturum 240 dakika işlem yapılmazsa kapanır (`app.session_idle_minutes`). Çıkış menüdeki **Çıkış** düğmesiyledir.
-- Şifre değiştirme: **Şifre** (`/admin/sifre`) — mevcut şifre gerekir, yeni şifre en az 10 karakter.
-  Şifre unutulursa sunucuda: `php bin/install.php --reset-password --password=YENI_SIFRE`.
-- Tüm formlar CSRF korumalıdır; silme ve “Şimdi yayınla” işlemleri onay ister.
-
-**Bölümler**
+Adres: `https://cr7.com.tr/admin` (giriş `/admin/giris`). Panel arama motorlarına kapalıdır (`noindex` +
+`X-Robots-Tag`, robots.txt'de `/admin` engelli).
 
 | Bölüm | Adres | Ne yapılır |
 |---|---|---|
-| Panel | `/admin` | Bugünkü otomatik yayın / günlük limit, toplam haber, kuyrukta bekleyen ve başarısız kayıtlar, video ve yeni sipariş sayıları; zamanlanmış görevlerin son çalışması, durumu ve mesajı (**Şimdi çalıştır**), son Transfermarkt senkronizasyonu, son 50 günlük satırı, **Önbelleği temizle**. |
-| Haberler | `/admin/haberler` | Arama, durum (yayında / zamanlanmış / taslak) ve tür (otomatik / elle) filtreleri. Yeni haber ve düzenleme: başlık, adres (başlıktan otomatik), özet (≤ 500), HTML metin (kayıtta güvenli etiketlere temizlenir), etiketler, durum, indekslenme, yayın tarihi (İstanbul saati; ileri tarih = zamanlanmış), SEO başlığı. Paylaşım (OG) görseli kayıtta oluşturulur, başlık değişince yenilenir. Otomatik haberlerin özgünlük oranı, kaynak sayısı ve kaynak bağlantıları salt okunur gösterilir. |
-| Haber Kuyruğu | `/admin/haber-kuyrugu` | Toplanan kaynak haberler: durum (bekliyor / başarısız / aynı hikâye / atlandı / yayınlandı), kaynak ve arama filtresi, hikâye kümeleri. **Şimdi yayınla** günlük limit, aralık ve yayın penceresini beklemeden yayınlar (özgünlük eşiği yine uygulanır) ve sonucu bağlantısıyla gösterir; **Atla** kaydı otomatik yayından çıkarır. |
-| Videolar | `/admin/videolar` | YouTube bağlantısı (watch, youtu.be, shorts, embed) ya da video kimliğiyle ekleme; kategori, durum, öne çıkan filtreleri; başlık, açıklama, kategori, öne çıkarma ve durum (yayında / taslak / gizli) düzenleme; silme. Senkronizasyonla gelen bir videoyu kalıcı kaldırmak için “Gizli” durumunu kullanın. |
-| Ayarlar | `/admin/ayarlar` | Günlük yayın limiti (1–50), iki yayın arası süre, otomatik haberlerin indekslenmesi, asgari özgünlük oranı (0,20–0,90), haber kaynaklarını açma/kapama, ana sayfa başlık/alt başlık/portre görseli, GA4 ölçüm kimliği (`G-…`), IndexNow anahtarı (**Anahtar üret**: 32 karakter), YouTube API anahtarı, web cron anahtarı ve cron satırları. |
-| Mağaza | `/admin/siparisler`, `/admin/urunler`, `/admin/odeme-ayarlari` | Forma Mağazası ve Ödeme bölümüne bakın. |
+| Panel | `/admin` | Bugünkü otomatik yayın / günlük limit, haber, kuyruk, video ve yeni sipariş sayıları; görevlerin son çalışması ve **Şimdi çalıştır** düğmeleri (tm-sync, news-fetch, news-publish, videos-sync, shop-expire); ödeme test modu açıksa uyarı; son günlük satırları; **Önbelleği temizle** |
+| Haberler | `/admin/haberler` | Arama ve filtreler; yeni haber / düzenleme (başlık, adres, özet, güvenli HTML metin, etiketler, durum, indekslenme, yayın tarihi, SEO başlığı); OG görseli kayıtta üretilir, başlık değişince yenilenir; silme |
+| Haber Kuyruğu | `/admin/haber-kuyrugu` | Toplanan kaynak haberler; durum, kaynak, arama ve hikâye kümesi filtreleri; notların Türkçe açıklaması (küme, yalnızca kanıt, başarısızlık nedeni); **Şimdi yayınla** (sonuç ve özgünlük oranı gösterilir), **Atla** |
+| Videolar | `/admin/videolar` | YouTube bağlantısıyla ekleme; kategori, durum, öne çıkan filtreleri; düzenleme; silme |
+| Siparişler | `/admin/siparisler` | Bkz. [Forma Mağazası](#forma-mağazası-ve-ödeme) |
+| Ürünler | `/admin/urunler` | Ürün ekleme, düzenleme, fotoğraf/çizim, silme |
+| Ödeme Ayarları | `/admin/odeme-ayarlari` | Mağaza açık/kapalı, **sipariş alma açık/kapalı**, kargo, satıcı bilgileri, PayTR / iyzico / Shopier / Havale |
+| Ayarlar | `/admin/ayarlar` | Haber yayını (günlük limit 1–50, aralık, yayın penceresi, haber yaşı, özgünlük oranı, indekslenme), haber kaynakları, ana sayfa başlığı/alt başlığı/portre, GA4, IndexNow (**Anahtar üret**), Google/Bing/Yandex doğrulama kodları, YouTube API anahtarı, cron satırı ve web cron anahtarı |
+| Şifre | `/admin/sifre` | Şifre değiştirme (mevcut şifre gerekir, yeni şifre en az 10 karakter) |
 
-Ayarlar veritabanındaki `settings` tablosunda tutulur ve `config/config.php` değerlerini geçersiz kılar;
-boş bırakılan ana sayfa metinleri varsayılana döner. Gizli değerler (YouTube API anahtarı, web cron anahtarı)
-hiçbir zaman tam gösterilmez: alan boş bırakılırsa kayıtlı değer korunur, “sil” kutusu değeri kaldırır.
-Yeni üretilen web cron adresi yalnızca üretildiği anda tam gösterilir; kaybedilirse yeni anahtar üretin.
-
-**Elle çalıştırılan işlemler** (`POST /admin/islem/{görev}`): `tm-sync`, `news-fetch`, `news-publish`,
-`videos-sync` görevleri aralıkları beklenmeden (`Scheduler::run($görev, true)`) çalıştırılır; `cache-clear`
-`storage/cache` önbelleğini temizler. Başka bir cron çalışması sürüyorsa görev “şu an çalıştırılamadı”
-uyarısıyla döner. Uzun süren görevler (Transfermarkt senkronizasyonu) birkaç dakika sürebilir.
+- Hatalı girişler genel bir mesajla reddedilir; aynı IP'den 15 dakikada 5 hatalı denemeden sonra giriş geçici
+  olarak kilitlenir. Oturum 240 dakika işlem yapılmazsa kapanır (`app.session_idle_minutes`).
+- Şifre unutulursa sunucuda: `php bin/install.php --reset-password --password='YENİ-ŞİFRE'`.
+- Panel işlemleri (`POST /admin/islem/{görev}`) görevleri aralık beklemeden çalıştırır; başka bir cron çalışması
+  sürüyorsa “şu an çalıştırılamadı” uyarısı verilir. Transfermarkt senkronizasyonu ilk seferde ≈10 sn sürer.
 
 ## SEO
 
-Site, arama motorları için baştan uyumlu olacak şekilde kurgulanmıştır. Her sayfa denetleyicisi bir
-`App\Core\Seo` nesnesi üretir; `templates/layouts/main.php` bu nesneden `<title>`, açıklama, kanonik adres,
-`robots`, `hreflang` (tr + x-default), Open Graph, Twitter Card ve JSON-LD etiketlerini basar.
+Her sayfa denetleyicisi bir `App\Core\Seo` nesnesi üretir; `templates/layouts/main.php` bu nesneden `<title>`,
+açıklama, kanonik adres, `robots`, `hreflang` (tr + x-default), Open Graph, Twitter Card ve JSON-LD etiketlerini basar.
 
-**Sayfa kuralları**
+**Uygulanan kurallar (kontrol listesi)**
 
-- Her sayfada **tek bir `<h1>`**, benzersiz Türkçe başlık (site eki ` | CR7.com.tr` hariç en fazla 60 karakter)
-  ve 120–160 karakterlik açıklama bulunur (`tests/SiteTest.php` ana sayfa, Hayatı, Kupalar ve yasal sayfalar
-  için bunu otomatik olarak denetler).
-- **Kanonik adres** her zaman mutlak ve sorgu parametresizdir; sayfalı listeler kendi `?sayfa=N` adresine
-  kanoniklenir ve `rel="prev/next"` bağlantıları verir.
-- **Sayfa yolu (breadcrumb)** iç sayfalarda hem görsel olarak hem de `BreadcrumbList` JSON-LD olarak otomatik
-  basılır (`Seo::$breadcrumbs`, "Ana Sayfa" kendiliğinden eklenir).
-- Arama sonuçları (`/arama`), hata sayfaları ve hazırlık sayfaları `noindex,follow` olarak işaretlenir;
-  bilinmeyen adresler gerçek **404** döner (soft-404 yoktur), sondaki `/` 301 ile temizlenir.
-- Paylaşım görseli varsayılan olarak `public/assets/img/og-default.png` (1200×630); haberler kendi
-  OG görsellerini kullanır.
-
-**Yapılandırılmış veriler (JSON-LD)**
-
-| Sayfa | Şemalar |
-|---|---|
-| Ana sayfa `/` | `WebSite` (+ `/arama?q={search_term_string}` arama eylemi), `Organization` (logo), `Person` |
-| Hayatı `/hayati` | Ayrıntılı `Person` (doğum yeri, boy, kulüpler, ödüller, sameAs), `FAQPage` (tüm SSS), `BreadcrumbList` |
-| Kupalar `/kupalar-ve-oduller` | İki `ItemList` (takım kupaları, bireysel ödüller), `Person`, `BreadcrumbList` |
-| Hakkında / İletişim / Gizlilik | `AboutPage`, `ContactPage` (+ `ContactPoint`), `WebPage` |
-| Haber, video, takım, ürün sayfaları | `NewsArticle`, `VideoObject`, `SportsTeam`, `Product` (ilgili modüller) |
-
-`Person.sameAs`: Wikipedia (TR/EN), Wikidata (Q11571), Instagram, X, Facebook ve YouTube resmî hesapları.
-Ana sayfadaki portre `site.portrait_url` ayarından, boşsa Transfermarkt profilinden gelir (bu durumda
-"Fotoğraf: IMAGO / Transfermarkt" kaynak satırı gösterilir).
+- [x] Her sayfada tek `<h1>`, benzersiz Türkçe başlık (site eki hariç ≤ 60 karakter), 120–160 karakter açıklama
+- [x] Mutlak kanonik adres; sayfalı listelerde `?sayfa=N` kendi kanoniği + `rel="prev/next"`
+- [x] Filtreli/arama sayfaları `noindex,follow`; panel, ödeme ve sipariş sayfaları `noindex,nofollow`
+- [x] Bilinmeyen adresler gerçek **404** (soft-404 yok); sondaki `/`, eski video adresleri ve panelde adresi (slug)
+      değiştirilen haber/ürünlerin eski adresleri **301** (`slug_redirects` tablosu; eski kurulumlarda bir kez
+      `php bin/install.php` çalıştırın); `?sayfa=1` → sayfasız adrese 301; tüm site HTTPS + www'suz 301
+- [x] Filtreli listelerde tek ince içerik kuralı: 3'ten az öğeli etiket, video kategorisi ve kulüp formaları sayfası `noindex,follow`
+- [x] Koşullu istekler: herkese açık 200 yanıtlarında zayıf `ETag`; `If-None-Match` eşleşirse gövdesiz **304**
+- [x] `BreadcrumbList` (görsel + JSON-LD) tüm iç sayfalarda
+- [x] Yapılandırılmış veri: `WebSite` (+ arama eylemi), `Organization`, `Person` (sitenin her yerinde aynı `@id`:
+      `/hayati#cristiano-ronaldo`), `FAQPage`, `ItemList`, `SportsTeam`, `Dataset`, `NewsArticle`, `VideoObject`, `Product`
+- [x] 1200×630 Open Graph görselleri (her haber, forma ve bölüm sayfası — Hayatı, Kariyer, Takımlar, İstatistikler,
+      Kupalar, Videolar — için ayrı kart; seçkin videolarda 1280×720 `maxresdefault`)
+- [x] XML site haritaları (görsel, video ve Google Haberler uzantılarıyla), dinamik `robots.txt`, RSS
+- [x] IndexNow ile Bing/Yandex'e anında bildirim
+- [x] Mobil öncelikli, duyarlı tasarım; yatay kaydırma yok; görseller boyutlu ve tembel yüklemeli (video sayfasının ana görseli hariç)
+- [x] Video sayfalarında oynatıcı (`youtube-nocookie.com` iframe) sunucu tarafında basılır: Google videoyu tıklama
+      olmadan bulur. Türkçe başlığı olmayan (kanallardan otomatik gelen) videolar Türkçe başlık verilene kadar `noindex`
+- [x] Gizlilik odaklı: YouTube gizlilik geliştirilmiş modda (oynatılana kadar çerez yok), Analytics yalnızca çerez onayıyla
+- [x] Güvenlik başlıkları ve nonce tabanlı CSP; HTML yanıtlarında doğru `Content-Type` ve `lang="tr"`
 
 **Site haritaları**
 
 | Adres | İçerik |
 |---|---|
-| `/sitemap.xml` | Dizin; URL içeren alt haritaları her biri için `lastmod` ile listeler |
-| `/sitemap-pages.xml` | Ana sayfa, bölüm sayfaları (`/istatistikler/maclar` dahil), mağaza (açıksa) ve yasal sayfalar |
-| `/sitemap-posts.xml` | İndekslenebilir tüm haberler, `image:image` ile |
-| `/sitemap-news.xml` | Google Haberler: son 48 saatin haberleri (`news:publication` = CR7.com.tr, dil `tr`) |
-| `/sitemap-videos.xml` | `video:video` (küçük resim, başlık, açıklama, `player_loc` gömme adresi, süre, yayın tarihi) |
-| `/sitemap-clubs.xml` | `/takimlar` ve tüm `/takimlar/{slug}` sayfaları (logo görseliyle) |
-| `/sitemap-products.xml` | Forma Mağazası ürünleri; mağaza kapalıyken **404** |
+| `https://cr7.com.tr/sitemap.xml` | Dizin; URL içeren alt haritaları `lastmod` ile listeler |
+| `https://cr7.com.tr/sitemap-pages.xml` | Ana sayfa, bölüm sayfaları, Hakkında/İletişim/Gizlilik; mağaza açıkken `/forma-magazasi` ve üç yasal sayfa; indekslenebilir listeler (sezon ve ana turnuva maç listeleri, video kategorileri, etiketler, kulüp formaları) |
+| `https://cr7.com.tr/sitemap-posts.xml` | İndekslenebilir tüm haberler (`image:image`) |
+| `https://cr7.com.tr/sitemap-news.xml` | Google Haberler: son 48 saatin haberleri |
+| `https://cr7.com.tr/sitemap-videos.xml` | Videolar (`video:video`: küçük resim, başlık, açıklama, oynatıcı adresi, süre, tarih) |
+| `https://cr7.com.tr/sitemap-clubs.xml` | `/takimlar` ve kulüp sayfaları (arma görseliyle) |
+| `https://cr7.com.tr/sitemap-products.xml` | Formalar; mağaza kapalıyken 404 |
 
-Haritalar `storage/cache` içinde 1 saat önbelleklenir (dizin ve Google Haberler haritası en fazla 15 dakika).
-Süre `config.php` içinde `'sitemap' => ['cache_ttl' => 3600]` ile değiştirilebilir (`0` = önbellek yok);
-yönetim panelindeki "Önbelleği temizle" işlemi haritaları anında yeniler. Bir modül eksikse ya da tablo
-boşsa ilgili harita boş (ama geçerli) bir `<urlset>` döner ve dizinde listelenmez.
+Haritalar 1 saat önbelleklenir (dizin ve Google Haberler haritası en fazla 15 dk; `sitemap.cache_ttl`); önbellek
+anahtarı haber/video/ürün tablolarının parmak izini içerdiği için yayınlanan, düzenlenen, yayından kaldırılan veya
+silinen içerik haritalara hemen yansır. Dizin ve Google Haberler haritası CDN'de en fazla 5 dk tutulur
+(`Cache-Control: max-age=300`). Paneldeki “Önbelleği temizle” haritaları da hemen yeniler. `lastmod` gerçek içerik
+değişikliğini gösterir (izlenme sayısı güncellemesi veya senkronizasyon zamanı değil; istatistiklerde son maç). `robots.txt` her şeye izin verir; `/admin`, `/cron`, `/kurulum`,
+`/arama`, `/odeme`, `/siparis` yollarını engeller ve `Sitemap: https://cr7.com.tr/sitemap.xml` satırını içerir —
+bu yüzden `app.url` canlı alan adıyla aynı olmalıdır. Alt klasör kurulumunda (`https://alan.com/cr7`) arama motorları
+yalnızca alan adının kökündeki `robots.txt` dosyasını okur; köke `Sitemap: https://alan.com/cr7/sitemap.xml` satırını
+içeren bir `robots.txt` koyun ya da site haritasını webmaster araçlarına elle gönderin.
 
-**robots.txt** (`/robots.txt`, dinamik): her şeye izin verir; `/admin`, `/cron`, `/kurulum`, `/arama`,
-`/odeme`, `/siparis` yollarını engeller ve mutlak `Sitemap:` adresini (`app.url` + `/sitemap.xml`) bildirir.
-`app.url` değerinin canlı alan adıyla (`https://cr7.com.tr`) aynı olması bu yüzden önemlidir.
+## Arama motorlarına kayıt (Google, Bing, Yandex) ve IndexNow
 
-**Yayına aldıktan sonra**
+**Google Search Console** (https://search.google.com/search-console)
 
-1. Google Search Console ve Bing Webmaster Tools'a `https://cr7.com.tr/sitemap.xml` adresini gönderin
-   (Yandex Webmaster için de aynı adres kullanılır).
-2. Google Haberler için `https://cr7.com.tr/sitemap-news.xml` adresini ayrıca ekleyebilirsiniz.
-3. Yeni/güncellenen haber ve videolar IndexNow ile Bing ve Yandex'e otomatik bildirilir (`indexnow.key`).
-4. Yapılandırılmış verileri https://search.google.com/test/rich-results ile kontrol edin.
+1. “Mülk ekle” → **Alan adı** türünü seçip `cr7.com.tr` yazın. Verilen `google-site-verification=…` TXT
+   kaydını cPanel → **Zone Editor** → alan adı → “+ TXT Kaydı” ile ekleyin, birkaç dakika sonra “Doğrula”ya basın.
+   *Alternatif:* “URL ön eki” türünde `https://cr7.com.tr/` ekleyip **HTML etiketi** yöntemini seçin; etiketteki
+   kodu panel → Ayarlar → **Google Search Console doğrulama kodu** alanına yapıştırıp kaydedin (etiketin tamamını
+   yapıştırmak da olur), sonra “Doğrula”ya basın.
+2. Sol menü → **Site haritaları** → `sitemap.xml` gönderin (alt haritalar dizinden otomatik bulunur).
+   İsterseniz `sitemap-news.xml` ve `sitemap-videos.xml` adreslerini ayrıca ekleyin.
+3. **URL denetimi** ile ana sayfa, `/hayati` ve bir haber sayfası için “Dizine eklenmesini iste”yi kullanın.
+4. Yapılandırılmış verileri https://search.google.com/test/rich-results ile, mobil görünümü URL denetimindeki
+   “Canlı URL'yi test et” ile kontrol edin. Haberlerin Google Haberler'de görünmesi için ayrıca
+   https://publishercenter.google.com adresinden yayıncı profili oluşturabilirsiniz.
+
+**Bing Webmaster Tools** (https://www.bing.com/webmasters)
+
+1. “Google Search Console'dan içe aktar” seçeneğiyle siteyi ve site haritalarını tek adımda alın, ya da siteyi elle
+   ekleyip **HTML Meta Etiketi** yöntemindeki `msvalidate.01` kodunu panel → Ayarlar → **Bing Webmaster doğrulama
+   kodu** alanına girin ve “Doğrula”ya basın.
+2. **Site Haritaları** → `https://cr7.com.tr/sitemap.xml` gönderin.
+3. **IndexNow** bölümünde bildirimlerin geldiğini görebilirsiniz (aşağıya bakın).
+
+**Yandex Webmaster** (https://webmaster.yandex.com)
+
+1. “Site ekle” → `https://cr7.com.tr`. **Meta etiketi** yöntemindeki `yandex-verification` kodunu panel →
+   Ayarlar → **Yandex Webmaster doğrulama kodu** alanına girip “Kontrol et”e basın (DNS TXT yöntemi de kullanılabilir).
+2. **Dizinleme → Site haritası dosyaları** → `https://cr7.com.tr/sitemap.xml` ekleyin.
+3. **Bölge** olarak Türkiye'yi seçin.
+
+Doğrulama kodları yalnızca ana sayfaya `<meta>` etiketi olarak eklenir ve geçersiz karakter içeren kodlar
+kaydedilmez. Doğrulamadan sonra kodları silmeyin; araçlar sahipliği zaman zaman yeniden kontrol eder.
+
+**IndexNow** (Bing, Yandex, Seznam, Naver): panel → Ayarlar → IndexNow → **Anahtar üret** (32 karakter) ve
+kaydedin. Anahtar `https://cr7.com.tr/indexnow-key.txt` adresinden sunulur (anahtar yokken 404). Bundan sonra
+her yeni/güncellenen haber ve yeni video `api.indexnow.org` üzerinden otomatik bildirilir; yerel/test
+adreslerinden bildirim yapılmaz. Sonuçlar `storage/logs` günlüğünde “IndexNow ping ok / failed” satırlarıyla görünür.
+
+## Güvenlik notları
+
+- `app.debug` canlıda **false** olmalıdır; hatalar ziyaretçiye gösterilmez, `storage/logs/` altına yazılır.
+- `app.secret` uzun ve rastgele olmalıdır; kurulumdan sonra `/kurulum` zaten 404 döner.
+- `config/config.php` dosyasının izni 640/600 olmalı ve asla herkese açık bir depoya konmamalıdır (`.gitignore`
+  içindedir). Belge kökü `public/` olmalıdır; olamıyorsa kökteki `.htaccess` uygulama klasörlerini engeller.
+- Tüm SQL sorguları hazırlıklı ifadelerle çalışır; şablon çıktıları `e()` ile kaçışlanır; haber/ürün HTML'i güvenli
+  etiket listesiyle temizlenir.
+- Tüm formlar CSRF belirteci taşır. Yönetici girişi IP başına 15 dakikada 5 hatalı denemeyle sınırlıdır; girişte
+  oturum kimliği yenilenir; oturum çerezi `HttpOnly` + `SameSite=Lax` (+ HTTPS'te `Secure`).
+- Her HTML yanıtında güvenlik başlıkları (`X-Content-Type-Options`, `Referrer-Policy`, `X-Frame-Options`,
+  `Permissions-Policy`) ve nonce tabanlı Content-Security-Policy gönderilir.
+- Ödeme bildirimleri yalnızca sağlayıcı imzasıyla kabul edilir; imzasız/yanlış bildirim 400 döner ve sipariş
+  adresini açığa çıkarmaz. Kart bilgisi sitede hiç işlenmez veya saklanmaz.
+- Web cron adresi gizli bir anahtar içerir; sızdıysa panelden yeni anahtar üretin. Gizli değerler (API anahtarları,
+  ödeme anahtarları, cron anahtarı) panelde hiçbir zaman tam gösterilmez.
+- Yüklenen ürün fotoğraflarının türü içerikten kontrol edilir, rastgele adla kaydedilir; klasörde betik çalışmaz.
+- Google Analytics yalnızca `analytics.ga4_id` ayarlıysa ve ziyaretçi çerez onayı verirse yüklenir.
+- Yönetici şifresini en az 12 karakter, benzersiz seçin; cPanel hesabında iki adımlı doğrulamayı açın.
+
+## Klasör izinleri
+
+| Yol | İzin |
+| --- | --- |
+| `storage/`, `storage/cache/`, `storage/logs/`, `storage/locks/` | 755 veya 775 (PHP yazabilmeli) |
+| `public/og/` | 755 veya 775 (haber ve forma OG görselleri) |
+| `public/uploads/products/` | 755 veya 775 (ürün fotoğrafları) |
+| `config/config.php` | 640 veya 600 |
+| Diğer dosyalar | dosyalar 644, klasörler 755 |
+
+cPanel'de PHP genellikle hesap kullanıcısıyla çalıştığı için 755/644 yeterlidir.
+
+## Güncelleme ve yedekleme
+
+1. **Yedek alın:** veritabanı (cPanel → phpMyAdmin → Dışa Aktar, ya da
+   `mysqldump -u KULLANICI -p VERITABANI > yedek.sql`), `config/config.php`, `public/uploads/` ve `public/og/`.
+   cPanel → **Yedekleme** ile tam hesap yedeği de alabilirsiniz.
+2. **Yeni dosyaları yükleyin** (`config/config.php`, `storage/`, `public/uploads/` ve `public/og/` içeriğinin
+   üzerine yazmayın) ya da `git pull` yapın.
+3. **Kurulumu yeniden çalıştırın:** `php bin/install.php`. Eksik tabloları oluşturur, eksik seed verilerini ve
+   görselleri ekler; mevcut verilere ve yönetici şifresine dokunmaz.
+4. **Önbelleği temizleyin:** panel → Panel → **Önbelleği temizle** ya da `rm -f storage/cache/*.cache`.
+5. **Kontrol edin:** `php bin/cron.php all --force` hatasız bitmeli; panelin ana sayfasında görevler “ok” görünmeli.
+
+## Yerel geliştirme ve testler
+
+```bash
+cd cr7
+export CR7_DB_DRIVER=sqlite CR7_DB_PATH=/tmp/cr7.sqlite CR7_APP_URL=http://127.0.0.1:8080 CR7_DEBUG=1
+php bin/install.php --password=admin12345
+php bin/cron.php all --force
+php -S 127.0.0.1:8080 -t public public/index.php   # http://127.0.0.1:8080 , panel: /admin (admin / admin12345)
+php bin/test.php                                    # tüm testler (bellek içi SQLite, geçici günlük/önbellek klasörü)
+php bin/test.php Shop                               # adı "Shop" içeren testler (ör. ShopTest)
+php bin/test.php CoreTest::testRouter               # tek test
+```
+
+- `CR7_DEBUG=1` her PHP uyarısını hataya çevirir; geliştirme sırasında açık tutun.
+- Testler gerçek `storage/logs` ve `storage/cache` klasörlerine yazmaz; her test boş bir veritabanıyla başlar.
+- MySQL ile denemek için: `CR7_DB_DRIVER=mysql CR7_DB_HOST=127.0.0.1 CR7_DB_NAME=cr7 CR7_DB_USER=cr7 CR7_DB_PASS=…`.
+
+## Sorun giderme
+
+- **Beyaz sayfa / 500:** `storage/logs/YYYY-AA-GG.log` ve `storage/logs/php-error.log` dosyalarına bakın;
+  `storage/` yazılabilir mi, PHP sürümü 8.1+ mı, `config/config.php` sözdizimi doğru mu (`php -l config/config.php`)?
+- **“Transfermarkt API yanıt vermedi ve önbellekte kullanılabilir veri yok”:** sunucunun dışarıya HTTPS isteği
+  yapabildiğini kontrol edin: `curl -I https://tmapi-alpha.transfermarkt.technology/player/8198`. Bazı paylaşımlı
+  hostinglerde giden bağlantılar için destek talebi gerekir. Önbelleği sıfırlamak için phpMyAdmin'de
+  `DELETE FROM api_cache;` çalıştırıp `php bin/cron.php tm-sync --force` ile yeniden başlatın.
+- **Haber yayınlanmıyor:** panel → Haber Kuyruğu'nda kayıtların notlarına bakın (özgünlük, kısa metin, konu dışı);
+  panelin ana sayfasında `news-publish` mesajı limit/aralık/pencere durumunu söyler (“Yayın penceresi dışında”,
+  “Günlük limit doldu” …).
+- **Video gelmiyor:** `https://www.youtube.com/feeds/videos.xml?channel_id=UC…` adresi sunucudan açılabiliyor mu?
+  Gömmeye kapalı videolar bilerek atlanır.
+- **Cron çalışmıyor:** panelin ana sayfasındaki “son çalışma” zamanına bakın; komutu cPanel'deki PHP yoluyla elle
+  çalıştırıp çıktısını görün: `/usr/bin/php /home/KULLANICI/cr7/bin/cron.php`. “Başka bir zamanlanmış görev hâlâ
+  çalışıyor” mesajı bir önceki çalışmanın sürdüğünü gösterir.
+- **Görseller (OG) oluşmuyor:** `gd` eklentisinin FreeType desteğiyle kurulu olduğunu ve `public/og/` klasörünün
+  yazılabilir olduğunu kontrol edin; `php bin/install.php` eksik görselleri yeniden üretir.

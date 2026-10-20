@@ -15,6 +15,8 @@ final class OgImage
 {
     public const WIDTH = 1200;
     public const HEIGHT = 630;
+    /** Width of the card thumbnail used in listings (srcset); the 1200 px PNG stays for og:image. */
+    public const CARD_WIDTH = 640;
     private const GOLD = [212, 175, 55];
     private const GOLD_SOFT = [241, 215, 122];
 
@@ -22,7 +24,7 @@ final class OgImage
      * Render the image to public/og/<fileName>.png and return '/og/<fileName>.png' (null when GD /
      * FreeType are unavailable or the file cannot be written).
      */
-    public static function generate(string $title, string $subtitle, string $fileName): ?string
+    public static function generate(string $title, string $subtitle, string $fileName, string $eyebrow = 'HABER'): ?string
     {
         if (!function_exists('imagecreatetruecolor') || !function_exists('imagettftext')) {
             return null;
@@ -50,11 +52,11 @@ final class OgImage
 
         imagettftext($img, 470, 0, 800, 640, $watermark, $font, '7');
 
-        // Eyebrow: gold pill "HABER".
-        $pill = imagettfbbox(22, 0, $font, 'HABER');
+        // Eyebrow: gold pill ("HABER" for news, the section name for page cards).
+        $pill = imagettfbbox(22, 0, $font, $eyebrow);
         $pillWidth = ($pill[2] - $pill[0]) + 40;
         imagefilledrectangle($img, 80, 70, 80 + $pillWidth, 116, $gold);
-        imagettftext($img, 22, 0, 100, 104, self::color($img, [10, 10, 12]), $font, 'HABER');
+        imagettftext($img, 22, 0, 100, 104, self::color($img, [10, 10, 12]), $font, $eyebrow);
         imagettftext($img, 22, 0, 80 + $pillWidth + 22, 104, $goldSoft, $font, 'Cristiano Ronaldo');
 
         // Title: largest font size that fits in 4 lines.
@@ -101,18 +103,88 @@ final class OgImage
             @unlink($tmp);
             return null;
         }
+        self::variant('/og/' . $name . '.png');
         return '/og/' . $name . '.png';
     }
 
-    /** Remove a generated image ('/og/x.png'); ignores anything outside public/og. */
+    /**
+     * '/og/x-640.jpg' — a 640x336 JPEG of a generated '/og/x.png' (about a third of the PNG's
+     * bytes), created on first use; null when $path is not a generated image or GD cannot write it.
+     */
+    public static function variant(?string $path): ?string
+    {
+        if ($path === null || preg_match('#^/og/([a-z0-9-]+)\.png$#', $path, $m) !== 1) {
+            return null;
+        }
+        $variant = '/og/' . $m[1] . '-' . self::CARD_WIDTH . '.jpg';
+        $target = App::basePath('public' . $variant);
+        if (is_file($target)) {
+            return $variant;
+        }
+        $source = App::basePath('public' . $path);
+        if (!is_file($source) || !function_exists('imagecreatefrompng') || !function_exists('imagejpeg')) {
+            return null;
+        }
+        $src = @imagecreatefrompng($source);
+        if ($src === false) {
+            return null;
+        }
+        $height = (int) round(self::CARD_WIDTH * imagesy($src) / max(1, imagesx($src)));
+        $img = imagecreatetruecolor(self::CARD_WIDTH, $height);
+        imagecopyresampled($img, $src, 0, 0, 0, 0, self::CARD_WIDTH, $height, imagesx($src), imagesy($src));
+        imageinterlace($img, true);
+        $tmp = $target . '.' . bin2hex(random_bytes(4)) . '.tmp';
+        $ok = @imagejpeg($img, $tmp, 82);
+        if (!$ok || !@rename($tmp, $target)) {
+            @unlink($tmp);
+            return null;
+        }
+        return $variant;
+    }
+
+    /**
+     * Share card of a section page (/hayati, /kariyer, /takimlar/real-madrid …) so these pages do not
+     * all share og-default.png: '/og/sayfa-<key>-<hash>.png', generated once (a new title gets a new
+     * file; older cards of the same key are removed). Null without GD: the page keeps the default.
+     */
+    public static function page(string $key, string $title, string $subtitle, string $eyebrow): ?string
+    {
+        $key = trim((string) preg_replace('/[^a-z0-9-]+/', '-', strtolower($key)), '-');
+        if ($key === '') {
+            return null;
+        }
+        $name = 'sayfa-' . substr($key, 0, 80) . '-' . substr(sha1($title . '|' . $subtitle . '|' . $eyebrow), 0, 6);
+        if (is_file(App::basePath('public/og/' . $name . '.png'))) {
+            return '/og/' . $name . '.png';
+        }
+        foreach (glob(App::basePath('public/og/sayfa-' . $key . '-*.png')) ?: [] as $old) {
+            if (preg_match('#/sayfa-' . preg_quote($key, '#') . '-[0-9a-f]{6}\.png$#', $old) === 1) {
+                self::delete('/og/' . basename($old));
+            }
+        }
+        return self::generate($title, $subtitle, $name, $eyebrow);
+    }
+
+    /** og:image:width/height for a generated 1200x630 card (none for null). */
+    public static function meta(?string $path): array
+    {
+        return $path === null ? [] : [
+            ['property' => 'og:image:width', 'content' => (string) self::WIDTH],
+            ['property' => 'og:image:height', 'content' => (string) self::HEIGHT],
+        ];
+    }
+
+    /** Remove a generated image ('/og/x.png', with its card variant); ignores anything outside public/og. */
     public static function delete(?string $path): void
     {
-        if ($path === null || preg_match('#^/og/[a-z0-9-]+\.png$#', $path) !== 1) {
+        if ($path === null || preg_match('#^/og/([a-z0-9-]+)\.png$#', $path, $m) !== 1) {
             return;
         }
-        $file = App::basePath('public' . $path);
-        if (is_file($file)) {
-            @unlink($file);
+        foreach ([$path, '/og/' . $m[1] . '-' . self::CARD_WIDTH . '.jpg'] as $generated) {
+            $file = App::basePath('public' . $generated);
+            if (is_file($file)) {
+                @unlink($file);
+            }
         }
     }
 
@@ -149,7 +221,7 @@ final class OgImage
         if ($bg instanceof \GdImage) {
             return $bg;
         }
-        $cache = App::basePath('storage/cache/og-news-bg.png');
+        $cache = App::storagePath('cache/og-news-bg.png');
         if (is_file($cache)) {
             $loaded = @imagecreatefrompng($cache);
             if ($loaded instanceof \GdImage && imagesx($loaded) === self::WIDTH) {

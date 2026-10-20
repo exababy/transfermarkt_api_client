@@ -15,7 +15,8 @@ declare(strict_types=1);
  *                     Placeholders are never followed by a suffix, so any value reads correctly.
  *   connectors      : neutral, additive sentence openers (no contrastive/causal ones, so mixing
  *                     sentences from different sources never creates a false logical link).
- *   title_patterns  : {{subject}} = subject of the (spun) source title, {{rest}} = remainder.
+ *   title_patterns  : epithet frames for a headline that opens with his name: {{subject}} = the name
+ *                     (with its case suffix), {{rest}} = the remainder of the spun headline.
  *   source_line     : {{source}} = source name(s)/link(s).
  * Typographic apostrophe (’) is used for Turkish proper-noun suffixes. Linguist QA 2026-10-20: fixed
  * unidiomatic collocations ("bir haber yaşandı", "bir gelişme geldi"), implicit subjects in outros and
@@ -49,11 +50,11 @@ return [
         '{Kariyerinde|Futbol kariyeri boyunca} {yüzlerce gole|sayısız gole} imza atan {{player}}, {yine|bir kez daha} {konuşulan isimler arasında|gündemin ilk sıralarında}.',
         '{Futbol gündeminde|Spor gündeminde} {bu kez|bu defa} {{player}} {var|ile ilgili bir gelişme var}.',
         '{{player}} {ile ilgili|hakkında} {yeni bir gelişme|yeni bir haber} {sizlerle|okurlarımızla}.',
-        '{Dünyanın en tanınmış sporcularından|Dünyanın en popüler futbolcularından} {{player}} ile ilgili {haberin|gelişmenin} {ayrıntıları|detayları} {haberimizde|bu haberde}.',
+        '{Dünyanın en tanınmış sporcularından|Dünyanın en popüler futbolcularından} {{player}}, {yeni bir gelişmeyle|yeni bir haberle} {gündemde|haberlere konu oldu}.',
         '{Efsane futbolcu|Efsanevi futbolcu|Portekizli efsane} {{player}} {yine|bir kez daha} haber oldu.',
         '{{player}} {ile ilgili|hakkında} {hayranlarını|sevenlerini} {yakından ilgilendiren|heyecanlandıran} {bir gelişme|bir haber} gündeme geldi.',
         '{Yeşil sahalarda|Futbol sahalarında} {uzun yıllar boyunca|yıllarca} {boy gösteren|ter döken} {{player}}, {yine|bir kez daha} {gündemde|haberlere konu oldu}.',
-        '{{player}} {hakkında|ile ilgili} {merak edilen|konuşulan} {gelişmenin|haberin} {ayrıntıları|detayları} {şöyle|şu şekilde}.',
+        '{Kariyerinde beş Ballon d’Or bulunan|Beş kez Ballon d’Or ödülünü kazanan} {{player}}, {yeni bir gelişmeyle|yeni bir haberle} {gündeme geldi|adından söz ettirdi}.',
         '{Dünya futbolunun|Futbol dünyasının} {ikonik|en tanınan} isimlerinden {{player}} ile ilgili {yeni bir gelişme var|yeni bir haber geldi|dikkat çeken bir haber geldi}.',
         '{Ronaldo hayranlarının|CR7 hayranlarının} {ilgiyle|merakla} takip edeceği {bir gelişme yaşandı|bir haber gündeme geldi}.',
     ],
@@ -145,22 +146,27 @@ return [
     ],
 
     'title_patterns' => [
+        // Epithet frames for a headline that opens with his name: {{subject}} = the name as the headline
+        // has it (incl. a case suffix: "Ronaldo'dan"), {{rest}} = the rest of the spun headline. Only
+        // permanent, factual epithets; no boilerplate tails such as "İşte ayrıntılar" / "Bütün ayrıntılar
+        // haberimizde" (spammy, bad for CTR) and no "{{subject}}, …" frames ("Ronaldo krizinde …" is a
+        // compound, a comma would change its meaning).
         '{{subject}} {{rest}}',
-        '{{subject}}, {{rest}}',
-        '{{subject}}: {{rest}}',
-        '{{subject}} {{rest}}: {İşte ayrıntılar|İşte detaylar|Ayrıntılar haberimizde}',
-        '{{subject}} {{rest}}, {işte ayrıntılar|işte detaylar}',
-        '{{subject}} cephesinde {yeni|dikkat çeken} gelişme: {{rest}}',
-        '{{subject}} {hakkında|ile ilgili} {dikkat çeken|yeni} gelişme: {{rest}}',
-        '{Dikkat çeken|Yeni} gelişme: {{subject}} {{rest}}',
-        '{{subject}} gündemde: {{rest}}',
-        '{Tüm gözler|Gözler} {{subject}} üzerinde: {{rest}}',
-        '{{subject}} {{rest}}: {Tüm ayrıntılar|Bütün ayrıntılar} haberimizde',
-        '{{subject}} hakkında {merak edilen|konuşulan} gelişme: {{rest}}',
-        '{Gündem|Gündemde}: {{subject}} {{rest}}',
-        '{{subject}} {için|açısından} {yeni|dikkat çeken} gelişme: {{rest}}',
-        '{Futbol gündemi|Spor gündemi}: {{subject}} {{rest}}',
-        '{{subject}} {yine|bir kez daha} gündemde: {{rest}}',
+        'Portekizli yıldız {{subject}} {{rest}}',
+        'Portekizli süperstar {{subject}} {{rest}}',
+        'Portekizli golcü {{subject}} {{rest}}',
+        'Portekizli efsane {{subject}} {{rest}}',
+        'Portekizli futbolcu {{subject}} {{rest}}',
+        'Yıldız futbolcu {{subject}} {{rest}}',
+        'Yıldız golcü {{subject}} {{rest}}',
+        'Efsane futbolcu {{subject}} {{rest}}',
+        'Efsane golcü {{subject}} {{rest}}',
+        'Dünyaca ünlü futbolcu {{subject}} {{rest}}',
+        'Dünyaca ünlü yıldız {{subject}} {{rest}}',
+        'Dünyaca ünlü golcü {{subject}} {{rest}}',
+        'CR7 lakaplı {{subject}} {{rest}}',
+        'CR7 lakaplı yıldız {{subject}} {{rest}}',
+        'Süperstar {{subject}} {{rest}}',
     ],
 
     'source_line' => [

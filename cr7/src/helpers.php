@@ -26,11 +26,19 @@ function e(mixed $value): string
     return htmlspecialchars((string) $value, ENT_QUOTES | ENT_SUBSTITUTE | ENT_HTML5, 'UTF-8');
 }
 
-/** Absolute URL for an app path ('/haberler' => 'https://cr7.com.tr/haberler'); absolute URLs pass through. */
+/**
+ * Absolute URL for an app path ('/haberler' => 'https://cr7.com.tr/haberler'); absolute URLs pass through.
+ * Sub-folder installs: '/haberler' and '/cr7/haberler' both give 'https://host/cr7/haberler'.
+ */
 function url(string $path = '/'): string
 {
     if (preg_match('#^https?://#i', $path) === 1) {
         return $path;
+    }
+    // Paths that already carry the sub-folder prefix (asset(), Shop::imageUrl()) are not prefixed twice.
+    $prefix = App::urlPrefix();
+    if ($prefix !== '' && ($path === $prefix || str_starts_with($path, $prefix . '/'))) {
+        $path = substr($path, strlen($prefix));
     }
     return rtrim((string) Config::get('app.url', ''), '/') . '/' . ltrim($path, '/');
 }

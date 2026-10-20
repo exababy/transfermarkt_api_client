@@ -24,6 +24,12 @@ final class Format
         return number_format((float) $n, $decimals, ',', '.');
     }
 
+    /** Turkish percent style, sign first: 72.14 (1 decimal) => '%72,1'; null => '-'. */
+    public static function percent(int|float|null $n, int $decimals = 0): string
+    {
+        return $n === null ? '-' : '%' . self::number($n, $decimals);
+    }
+
     /**
      * UTC datetime/date string => Turkish date in Europe/Istanbul.
      * Tokens: j d m n Y y F M l D H i G s ; prefix a character with '\' to print it literally.

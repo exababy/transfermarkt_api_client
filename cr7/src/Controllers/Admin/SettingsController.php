@@ -26,11 +26,12 @@ final class SettingsController
 
     /**
      * Field definitions: setting key => [input name, type, options].
-     * Types: int, float, bool, text, url, ga4, indexnow, secret.
+     * Types: int, float, bool, text, url, ga4, indexnow, verification, secret.
      */
     public const FIELDS = [
         'news.daily_limit' => ['input' => 'news_daily_limit', 'type' => 'int', 'min' => 1, 'max' => 50, 'label' => 'Günlük yayın limiti'],
         'news.min_interval_minutes' => ['input' => 'news_min_interval_minutes', 'type' => 'int', 'min' => 0, 'max' => 1440, 'label' => 'İki yayın arası en az süre'],
+        'news.max_age_hours' => ['input' => 'news_max_age_hours', 'type' => 'int', 'min' => 6, 'max' => 168, 'label' => 'En fazla haber yaşı'],
         'news.index_spun_posts' => ['input' => 'news_index_spun_posts', 'type' => 'bool', 'label' => 'Otomatik haberler arama motorlarında indekslensin'],
         'spinner.min_change_ratio' => ['input' => 'spinner_min_change_ratio', 'type' => 'float', 'min' => 0.2, 'max' => 0.9, 'label' => 'Asgari özgünlük oranı'],
         'site.hero_title' => ['input' => 'site_hero_title', 'type' => 'text', 'max' => 120, 'label' => 'Ana sayfa başlığı'],
@@ -38,6 +39,9 @@ final class SettingsController
         'site.portrait_url' => ['input' => 'site_portrait_url', 'type' => 'url', 'max' => 500, 'label' => 'Portre görseli adresi'],
         'analytics.ga4_id' => ['input' => 'analytics_ga4_id', 'type' => 'ga4', 'label' => 'Google Analytics 4 ölçüm kimliği'],
         'indexnow.key' => ['input' => 'indexnow_key', 'type' => 'indexnow', 'label' => 'IndexNow anahtarı'],
+        'seo.google_verification' => ['input' => 'seo_google_verification', 'type' => 'verification', 'label' => 'Google Search Console doğrulama kodu'],
+        'seo.bing_verification' => ['input' => 'seo_bing_verification', 'type' => 'verification', 'label' => 'Bing Webmaster doğrulama kodu'],
+        'seo.yandex_verification' => ['input' => 'seo_yandex_verification', 'type' => 'verification', 'label' => 'Yandex Webmaster doğrulama kodu'],
         'youtube.api_key' => ['input' => 'youtube_api_key', 'type' => 'secret', 'pattern' => '/^[A-Za-z0-9_-]{20,100}$/', 'label' => 'YouTube Data API anahtarı'],
         'cron.web_token' => ['input' => 'cron_web_token', 'type' => 'secret', 'pattern' => '/^[A-Za-z0-9_-]{32,128}$/', 'label' => 'Web cron anahtarı'],
     ];
@@ -145,6 +149,14 @@ final class SettingsController
                     }
                     $values[$key] = ['action' => 'set', 'value' => $raw];
                     break;
+                case 'verification':
+                    $code = self::verificationCode($raw);
+                    if ($code === null) {
+                        $errors[$name] = $field['label'] . ' geçersiz: yalnızca kodu (content="…" içindeki değer) ya da meta etiketinin tamamını yapıştırın.';
+                        break;
+                    }
+                    $values[$key] = $code === '' ? ['action' => 'forget'] : ['action' => 'set', 'value' => $code];
+                    break;
                 case 'secret':
                     if (AdminPage::checked($request, $name . '_clear')) {
                         $values[$key] = ['action' => 'set', 'value' => ''];
@@ -158,6 +170,19 @@ final class SettingsController
                         $values[$key] = ['action' => 'set', 'value' => $raw];
                     }
                     break;
+            }
+        }
+
+        // Publish window [from, to) in Istanbul hours; from = to means "all day".
+        $from = AdminPage::input($request, 'news_window_from');
+        $to = AdminPage::input($request, 'news_window_to');
+        if ($from !== '' || $to !== '') {
+            if (preg_match('/^\d{1,2}$/', $from) !== 1 || (int) $from > 23) {
+                $errors['news_window_from'] = 'Yayın penceresinin başlangıcı 0 ile 23 arasında bir saat olmalıdır.';
+            } elseif (preg_match('/^\d{1,2}$/', $to) !== 1 || (int) $to > 24) {
+                $errors['news_window_to'] = 'Yayın penceresinin bitişi 0 ile 24 arasında bir saat olmalıdır.';
+            } else {
+                $values['news.publish_window'] = ['action' => 'set', 'value' => [(int) $from, (int) $to]];
             }
         }
 
@@ -235,6 +260,44 @@ final class SettingsController
         }
     }
 
+    /**
+     * Site verification code from the admin input: the bare code, or the whole
+     * <meta name="google-site-verification" content="…"> tag pasted from the webmaster tool.
+     * '' = empty input, null = invalid.
+     */
+    public static function verificationCode(string $raw): ?string
+    {
+        $raw = trim($raw);
+        if ($raw === '') {
+            return '';
+        }
+        if (preg_match('/content\s*=\s*["\']([^"\']*)["\']/i', $raw, $m) === 1) {
+            $raw = trim($m[1]);
+        }
+        return preg_match('/^[A-Za-z0-9_=+.\/-]{6,120}$/', $raw) === 1 ? $raw : null;
+    }
+
+    /** @return array{0: int, 1: int} effective news.publish_window [from, to) in Istanbul hours */
+    public static function publishWindow(): array
+    {
+        $window = Settings::get('news.publish_window', Config::get('news.publish_window', [7, 23]));
+        if (!is_array($window) || count($window) !== 2) {
+            return [0, 0];
+        }
+        $window = array_values($window);
+        return [max(0, min(23, (int) $window[0])), max(0, min(24, (int) $window[1]))];
+    }
+
+    /** '07:00–23:00', or 'Gün boyu' when from = to. */
+    public static function windowLabel(array $window): string
+    {
+        $window = array_values($window);
+        if (count($window) !== 2 || (int) $window[0] === (int) $window[1]) {
+            return 'Gün boyu';
+        }
+        return sprintf('%02d:00–%02d:00', (int) $window[0], (int) $window[1]);
+    }
+
     /** @return list<string> */
     public static function disabledSources(): array
     {
@@ -258,7 +321,8 @@ final class SettingsController
         $token = (string) ($current['cron_web_token'] ?? '');
         $reveal = Session::pull(self::REVEAL_KEY);
         $revealed = is_string($reveal) && $reveal !== '' && hash_equals($token, $reveal);
-        $window = Settings::get('news.publish_window', Config::get('news.publish_window', [7, 23]));
+        $window = self::publishWindow();
+        [$current['news_window_from'], $current['news_window_to']] = $window;
 
         return AdminPage::render('settings', 'Ayarlar', [
             'fields' => self::FIELDS,
@@ -272,9 +336,10 @@ final class SettingsController
                 'news_daily_limit' => Config::get('news.daily_limit', 10),
                 'news_min_interval_minutes' => Config::get('news.min_interval_minutes', 60),
                 'spinner_min_change_ratio' => Config::get('spinner.min_change_ratio', 0.4),
+                'news_max_age_hours' => Config::get('news.max_age_hours', 48),
+                'news_window' => self::windowLabel((array) Config::get('news.publish_window', [7, 23])),
             ],
-            'publishWindow' => is_array($window) && count($window) === 2 ? sprintf('%02d:00–%02d:00', (int) $window[0], (int) $window[1]) : '—',
-            'maxAgeHours' => (int) Settings::get('news.max_age_hours', Config::get('news.max_age_hours', 48)),
+            'publishWindow' => self::windowLabel($window),
             'youtubeMasked' => AdminPage::mask((string) ($current['youtube_api_key'] ?? '')),
             'cronToken' => $token,
             'cronRevealed' => $revealed,

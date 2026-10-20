@@ -4,6 +4,8 @@ declare(strict_types=1);
 
 namespace App\Install\Seeders;
 
+use App\Core\Database;
+use App\Core\Settings;
 use App\Install\Seeder;
 use App\Repositories\VideoRepository;
 use App\Services\Video\VideoText;
@@ -15,10 +17,14 @@ use App\Services\Video\VideoText;
  * from YouTube. Titles and descriptions are original Turkish texts.
  *
  * Idempotent: only missing youtube_ids are inserted; existing rows (possibly edited in the
- * admin panel) are left untouched.
+ * admin panel) are left untouched, and an id is inserted only once (setting videos.seeded_ids),
+ * so videos the admin deleted do not come back when the installer runs again (--reset-password).
  */
 final class VideoSeeder implements Seeder
 {
+    /** Settings key listing curated youtube_ids already seeded once. */
+    public const SEEDED_KEY = 'videos.seeded_ids';
+
     private const CHANNELS = [
         'uefa' => ['UCyGa1YEx9ST66rYrJTGIKOw', 'UEFA'],
         'fifa' => ['UCpcTrCXblq78GZrTUTLWeBw', 'FIFA'],
@@ -126,16 +132,48 @@ final class VideoSeeder implements Seeder
         ];
     }
 
+    /** Seeded videos without a 1280x720 maxresdefault.jpg on i.ytimg.com (checked 2026-10-20). */
+    private const NO_MAXRES = ['XLTC9NfTiRs'];
+
+    /** Largest thumbnail: maxresdefault (1280 px, large share/Discover previews) else hqdefault. */
+    public static function thumbnail(string $id): string
+    {
+        return VideoText::thumbnail($id, in_array($id, self::NO_MAXRES, true) ? 'hqdefault' : 'maxresdefault');
+    }
+
     public function run(): string
     {
         $repo = new VideoRepository();
         $added = 0;
         $existing = 0;
+        $removed = 0;
+        $seeded = Settings::get(self::SEEDED_KEY);
+        if (!is_array($seeded)) {
+            // Installs from before the setting existed seeded the whole list at once: a curated
+            // video missing there now was deleted by the admin.
+            $ids = array_column(self::videos(), 0);
+            $seeded = (int) Database::fetchValue('SELECT COUNT(*) FROM videos WHERE youtube_id IN (' . implode(',', array_fill(0, count($ids), '?')) . ')', $ids) > 0 ? $ids : [];
+        }
+        $seeded = array_values(array_filter($seeded, 'is_string'));
+        $before = Settings::get(self::SEEDED_KEY);
         foreach (self::videos() as [$id, $channel, $category, $featured, $date, $seconds, $views, $title, $description]) {
-            if ($repo->findByYoutubeId($id) !== null) {
+            $row = $repo->findByYoutubeId($id);
+            if ($row !== null) {
                 $existing++;
+                // Earlier installs stored hqdefault (480x360): upgrade, keeping any admin-set image.
+                if ($row['thumbnail_url'] === VideoText::thumbnail($id) && self::thumbnail($id) !== $row['thumbnail_url']) {
+                    Database::update('videos', ['thumbnail_url' => self::thumbnail($id)], 'id = ?', [(int) $row['id']]);
+                }
+                if (!in_array($id, $seeded, true)) {
+                    $seeded[] = $id;
+                }
                 continue;
             }
+            if (in_array($id, $seeded, true)) {
+                $removed++; // deleted in the admin panel: not re-added
+                continue;
+            }
+            $seeded[] = $id;
             [$channelId, $channelTitle] = self::CHANNELS[$channel];
             $repo->create([
                 'youtube_id' => $id,
@@ -144,7 +182,7 @@ final class VideoSeeder implements Seeder
                 'channel_id' => $channelId,
                 'channel_title' => $channelTitle,
                 'category' => $category,
-                'thumbnail_url' => VideoText::thumbnail($id),
+                'thumbnail_url' => self::thumbnail($id),
                 'duration_seconds' => $seconds,
                 'view_count' => $views,
                 'published_at' => $date . ' 12:00:00',
@@ -153,8 +191,12 @@ final class VideoSeeder implements Seeder
             ]);
             $added++;
         }
+        if ($seeded !== $before) {
+            Settings::set(self::SEEDED_KEY, $seeded);
+        }
+        $deleted = $removed > 0 ? ", {$removed} video yönetimden silindiği için yeniden eklenmedi" : '';
         return $added > 0
-            ? "{$added} seçkin Cristiano Ronaldo videosu eklendi" . ($existing > 0 ? ", {$existing} video zaten mevcut." : '.')
-            : "Seçkin videolar zaten mevcut ({$existing}).";
+            ? "{$added} seçkin Cristiano Ronaldo videosu eklendi" . ($existing > 0 ? ", {$existing} video zaten mevcut" : '') . $deleted . '.'
+            : "Seçkin videolar zaten mevcut ({$existing}){$deleted}.";
     }
 }

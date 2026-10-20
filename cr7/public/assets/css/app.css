@@ -90,6 +90,10 @@ button { font: inherit; }
 @media (min-width: 1200px) {
   .grid-4 { grid-template-columns: repeat(4, minmax(0, 1fr)); }
 }
+/* Two columns only where wide content (e.g. two data tables) fits side by side. */
+@media (min-width: 1024px) {
+  .grid-2-lg { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
 
 /* Content + sidebar (e.g. article + TOC). .layout-toc puts the TOC first on desktop. */
 .layout-sidebar, .layout-toc { display: grid; gap: clamp(24px, 4vw, 48px); grid-template-columns: minmax(0, 1fr); }
@@ -103,7 +107,7 @@ button { font: inherit; }
 .skip-link:focus { top: 12px; color: #111; }
 .site-header { position: sticky; top: 0; z-index: 100; background: rgba(10, 10, 12, .88); border-bottom: 1px solid var(--border); -webkit-backdrop-filter: saturate(160%) blur(14px); backdrop-filter: saturate(160%) blur(14px); }
 .header-inner { display: flex; align-items: center; justify-content: space-between; gap: 16px; height: var(--header-h); }
-.brand { display: inline-flex; align-items: center; gap: 4px; color: var(--text); text-decoration: none; flex: none; }
+.brand { display: inline-flex; align-items: center; gap: 4px; min-height: 44px; color: var(--text); text-decoration: none; flex: none; }
 .brand-logo { width: auto; height: 32px; }
 .brand-tld { color: var(--text-muted); font-size: .9rem; font-weight: 700; letter-spacing: .01em; }
 .brand:hover .brand-tld { color: var(--text); }
@@ -126,11 +130,15 @@ button { font: inherit; }
 @media (max-width: 959.98px) {
   .site-nav { order: 3; }
   .js .site-nav {
-    position: fixed; top: var(--header-h); left: 0; right: 0; max-height: calc(100vh - var(--header-h)); overflow-y: auto;
+    position: fixed; top: var(--header-h); left: 0; right: 0; z-index: 1; max-height: calc(100vh - var(--header-h)); overflow-y: auto; overscroll-behavior: contain;
     background: var(--bg-elev); border-bottom: 1px solid var(--border); box-shadow: var(--shadow);
     opacity: 0; visibility: hidden; transform: translateY(-10px); transition: opacity .22s, transform .22s var(--ease), visibility .22s;
   }
   .js .site-nav.is-open { opacity: 1; visibility: visible; transform: none; }
+  /* Open menu: dim the page below the header (the backdrop also catches the outside click) and lock page scroll. */
+  .js .site-header::after { content: ""; position: absolute; top: 100%; left: 0; right: 0; height: 100vh; background: rgba(5, 5, 7, .62); opacity: 0; visibility: hidden; transition: opacity .22s, visibility .22s; }
+  .js.nav-open .site-header::after { opacity: 1; visibility: visible; }
+  .js.nav-open { overflow: hidden; } /* root only: overflow on body too would make it a scroll container and reset the position */
   .js .site-nav ul { padding: 8px 16px 20px; }
   .site-nav a { padding: 13px 6px; border-bottom: 1px solid var(--border); font-size: 1.05rem; }
   .site-nav a[aria-current="page"] { padding-left: 14px; box-shadow: inset 3px 0 0 var(--gold); }
@@ -211,7 +219,7 @@ button { font: inherit; }
 .btn-ghost:hover { color: var(--text); border-color: var(--border); }
 .btn-sm { min-height: 36px; padding: .45em 1em; font-size: .85rem; }
 .btn-lg { min-height: 54px; padding: .85em 1.8em; font-size: 1.05rem; }
-.btn-block { width: 100%; }
+.btn-block { width: 100%; white-space: normal; text-align: center; }
 .btn:disabled, .btn[aria-disabled="true"], .btn.is-disabled { opacity: .5; cursor: not-allowed; pointer-events: none; filter: grayscale(.35); transform: none; }
 
 .badge { display: inline-flex; align-items: center; gap: 4px; padding: 3px 10px; border: 1px solid rgba(212, 175, 55, .38); border-radius: 999px; background: rgba(212, 175, 55, .14); color: var(--gold-soft); font-size: .74rem; font-weight: 800; letter-spacing: .03em; line-height: 1.5; white-space: nowrap; }
@@ -271,7 +279,16 @@ button { font: inherit; }
 }
 
 /* ---------- Tables ---------- */
-.table-wrap { overflow-x: auto; -webkit-overflow-scrolling: touch; border: 1px solid var(--border); border-radius: var(--radius); background: var(--bg-card); }
+.table-wrap { position: relative; overflow-x: auto; -webkit-overflow-scrolling: touch; border: 1px solid var(--border); border-radius: var(--radius); background: var(--bg-card); }
+/* Scroll cue: a soft gold edge appears on the side(s) that still have hidden columns ("local" covers hide it at the ends). */
+.table-wrap {
+  background:
+    linear-gradient(90deg, var(--bg-card) 40%, rgba(27, 27, 33, 0)) left / 36px 100% no-repeat local,
+    linear-gradient(270deg, var(--bg-card) 40%, rgba(27, 27, 33, 0)) right / 36px 100% no-repeat local,
+    radial-gradient(farthest-side at 0 50%, rgba(212, 175, 55, .45), transparent) left / 16px 100% no-repeat scroll,
+    radial-gradient(farthest-side at 100% 50%, rgba(212, 175, 55, .45), transparent) right / 16px 100% no-repeat scroll,
+    var(--bg-card);
+}
 .table { width: 100%; border-collapse: collapse; font-size: .92rem; font-variant-numeric: tabular-nums; }
 .table caption { padding: 14px; color: var(--text-muted); font-size: .85rem; text-align: left; caption-side: bottom; }
 .table th, .table td { padding: 11px 14px; border-bottom: 1px solid var(--border); text-align: left; vertical-align: middle; white-space: nowrap; }
@@ -287,6 +304,12 @@ button { font: inherit; }
 .cell-club { display: flex; align-items: center; gap: 9px; }
 .sort-btn { all: unset; display: inline-flex; align-items: center; gap: 5px; cursor: pointer; }
 .sort-btn:focus-visible { outline: 2px solid var(--gold); outline-offset: 3px; border-radius: 3px; }
+/* The sort button fills its header cell, so the whole cell is the tap target (th padding moves into the button). */
+.table th.has-sort { padding: 0; }
+.table th.has-sort .sort-btn { box-sizing: border-box; display: flex; width: 100%; min-height: 44px; padding: 11px 14px; }
+.table-compact th.has-sort .sort-btn { min-height: 40px; padding: 7px 10px; }
+.table th.has-sort.num .sort-btn { justify-content: flex-end; }
+.table th.has-sort .sort-btn:focus-visible { outline-offset: -3px; }
 .sort-btn::after { content: "↕"; color: #5d5d68; font-size: .85em; }
 [aria-sort="ascending"] .sort-btn::after { content: "▲"; color: var(--gold); }
 [aria-sort="descending"] .sort-btn::after { content: "▼"; color: var(--gold); }
@@ -350,6 +373,11 @@ button { font: inherit; }
 @media (min-width: 960px) {
   .toc { position: sticky; top: calc(var(--header-h) + 20px); max-height: calc(100vh - var(--header-h) - 40px); overflow-y: auto; }
 }
+/* Floating "İçindekiler" button (app.js) once a collapsible TOC has scrolled away; phones/tablets only. */
+.toc-fab { position: fixed; right: 16px; bottom: max(16px, env(safe-area-inset-bottom)); z-index: 90; display: none; align-items: center; gap: 8px; min-height: 46px; padding: 0 18px; border: 1px solid rgba(212, 175, 55, .55); border-radius: 999px; background: rgba(20, 20, 24, .94); box-shadow: var(--shadow); color: var(--gold-soft); font-weight: 750; font-size: .92rem; text-decoration: none; }
+.toc-fab::before { content: "☰"; font-size: 1rem; }
+.toc-fab.is-visible { display: inline-flex; }
+@media (min-width: 960px) { .toc-fab.is-visible { display: none; } }
 
 /* ---------- FAQ & facts ---------- */
 .faq { display: grid; gap: 10px; }
@@ -411,7 +439,7 @@ button { font: inherit; }
 .video-fallback { position: absolute; left: 12px; bottom: 12px; }
 
 /* ---------- Forms ---------- */
-.form { display: grid; gap: 18px; }
+.form { display: grid; gap: 18px; grid-template-columns: minmax(0, 1fr); }
 .form-row { display: grid; gap: 18px; }
 @media (min-width: 640px) { .form-row { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
 .field { display: grid; gap: 7px; align-content: start; min-width: 0; }
@@ -453,6 +481,10 @@ button { font: inherit; }
 .notice-info { border-left-color: var(--blue-soft); background: rgba(124, 180, 255, .1); }
 .notice-warning { border-left-color: var(--gold); background: rgba(212, 175, 55, .1); }
 .notice-title { display: block; margin-bottom: 4px; color: var(--text); font-weight: 800; }
+.notice:focus { outline: 0; }
+.notice:focus-visible { outline: 2px solid var(--gold); outline-offset: 2px; }
+.error-list { margin: 8px 0 0; padding-left: 1.2em; }
+.error-list li + li { margin-top: 4px; }
 .empty-state { padding: clamp(36px, 6vw, 64px) 20px; border: 1px dashed var(--border); border-radius: var(--radius); background: var(--bg-elev); color: var(--text-muted); text-align: center; }
 .empty-state h1, .empty-state h2, .empty-state h3 { color: var(--text); }
 .empty-state .lead { margin-inline: auto; }
@@ -479,7 +511,8 @@ button { font: inherit; }
 .price { color: var(--gold-soft); font-size: 1.22rem; font-weight: 850; font-variant-numeric: tabular-nums; }
 .price-old { color: var(--text-muted); font-size: .9rem; text-decoration: line-through; }
 .product-layout { display: grid; gap: clamp(24px, 4vw, 48px); grid-template-columns: minmax(0, 1fr); }
-@media (min-width: 960px) { .product-layout { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); align-items: start; } }
+/* Two columns from tablet portrait, so price and order/"yakında" box sit beside the photo above the fold. */
+@media (min-width: 720px) { .product-layout { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); align-items: start; } }
 .product-gallery { overflow: hidden; aspect-ratio: 1 / 1; border: 1px solid var(--border); border-radius: var(--radius); background: radial-gradient(circle at 50% 30%, #26262f, #111115 72%); }
 .product-gallery img { width: 100%; height: 100%; object-fit: contain; padding: 8%; }
 .order-box, .summary-box { padding: clamp(18px, 3vw, 28px); border: 1px solid var(--border); border-radius: var(--radius); background: var(--bg-card); }
@@ -494,6 +527,22 @@ button { font: inherit; }
 .cookie-consent[hidden] { display: none; }
 .cookie-consent p { margin: 0; }
 .cookie-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 12px; }
+
+/* ---------- Touch targets: standalone links and small controls reach 40–44px on phones/tablets ---------- */
+.link-more { min-height: 44px; }
+@media (max-width: 959.98px) {
+  .footer-links { gap: 0; }
+  .footer-links a, .footer-links .link-button { display: inline-flex; align-items: center; min-height: 40px; padding-block: 6px; }
+  .breadcrumbs { padding-top: 7px; }
+  .breadcrumbs ol { margin-bottom: -9px; }
+  .breadcrumbs a { padding-block: 9px; }
+  .tag, a.badge, .btn-sm { min-height: 40px; }
+  a.badge { padding-inline: 12px; }
+  .toc > summary { display: flex; align-items: center; min-height: 44px; margin-block: -9px; }
+  .toc[open] > summary { margin-bottom: 1px; }
+  /* Inline meta links ("71 kaynak", source name): a larger hit area without changing the line height. */
+  .meta a { display: inline-block; padding-block: 12px; margin-block: -12px; }
+}
 
 /* ---------- Accessibility ---------- */
 .visually-hidden { position: absolute !important; width: 1px; height: 1px; margin: -1px; padding: 0; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0; }
@@ -514,5 +563,5 @@ button { font: inherit; }
 .chart{container-type:inline-size;margin-inline:0}.chart .st{display:none}.chart .st-s{display:block}.chart .st text{font-size:13px}
 @container (min-width:460px){.chart .st-s{display:none}.chart .st-m{display:block}}
 @container (min-width:760px){.chart .st-m{display:none}.chart .st-l{display:block}}
-.st-hit:hover .st-mark{fill:var(--gold)}.table-wrap{position:relative}.chart-table{margin-top:12px}.chart-table .table-wrap{margin-top:10px}
+.st-hit:hover .st-mark{fill:var(--gold)}.chart-table{margin-top:12px}.chart-table .table-wrap{margin-top:10px}
 .page-stats img[class*=logo]{filter:drop-shadow(0 0 1px rgba(255,255,255,.7))}.page-stats .logo-xs{padding:2px;border-radius:5px;background:#ececf1;filter:none}

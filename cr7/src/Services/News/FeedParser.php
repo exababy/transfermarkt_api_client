@@ -106,7 +106,8 @@ final class FeedParser
         }
         $value = preg_replace('~<(script|style)\b[^>]*>.*?</\1>~is', ' ', $value) ?? $value;
         $value = preg_replace('~<br\s*/?>|</(p|div|li|h[1-6]|td|tr|table)>~i', ' ', $value) ?? $value;
-        $value = strip_tags($value);
+        // Real tags only: strip_tags() would also eat everything after a literal "<" ("Ronaldo <3 Georgina").
+        $value = preg_replace('~<!--.*?-->|<![^>]*>|</?[a-z][a-z0-9:-]*(?:\s(?:[^>"\']|"[^"]*"|\'[^\']*\')*)?/?>|<[a-z][a-z0-9:-]*\s[^>]*$~is', '', $value) ?? $value;
         $value = str_replace("\u{00A0}", ' ', $value);
         $value = preg_replace('/[\x{200B}-\x{200F}\x{2060}\x{FEFF}\x{00AD}]/u', '', $value) ?? $value; // zero-width, BOM, soft hyphen
         $value = trim(preg_replace('/\s+/u', ' ', $value) ?? $value);

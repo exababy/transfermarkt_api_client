@@ -26,6 +26,16 @@ final class NewsPublisher
 {
     /** Candidates tried per publishNext() call (each failure is recorded on the item). */
     private const TRIES = 3;
+    /** Turkish labels of the failure reasons stored in news_items.note (shown in the admin queue). */
+    public const REASONS = [
+        'no-text' => 'kaynak metni alınamadı',
+        'low-uniqueness' => 'özgünlük eşiğin altında',
+        'too-short' => 'metin çok kısa',
+        'title-too-similar' => 'başlık kaynağa çok benziyor',
+        'off-topic' => 'kaynak metni Ronaldo ile ilgili değil',
+        'error' => 'beklenmeyen hata',
+    ];
+
     /** Publishing is retried this many times for 'no-text' (network) failures. */
     private const MAX_ATTEMPTS = 3;
 
@@ -80,6 +90,13 @@ final class NewsPublisher
             $this->message = 'Bu haber zaten yayında.';
             return (int) $item['post_id'];
         }
+        // Another outlet's copy of a story that is already live: a second post would be a duplicate
+        // (and publishing would move the whole cluster away from the live post).
+        $storyPost = $this->storyPost($item);
+        if ($storyPost !== null) {
+            $this->message = 'Bu hikâye zaten yayında (yazı #' . $storyPost . '); aynı olay için ikinci bir yazı oluşturulmadı.';
+            return $storyPost;
+        }
         if (!$force) {
             $gate = $this->gate();
             if (!$gate['ok']) {
@@ -97,6 +114,9 @@ final class NewsPublisher
             $this->message = 'Bu kaynağın metni alınamıyor (yalnızca başlık kanıtı).';
             return null;
         }
+        if ($force) {
+            ArticleExtractor::forgetFailure((string) $item['url']); // an admin retry fetches the page again
+        }
         return $this->publish($item, $this->members($item));
     }
 
@@ -108,23 +128,40 @@ final class NewsPublisher
             return null;
         }
         $old = Database::fetchValue('SELECT image_path FROM posts WHERE id = ?', [$postId]);
-        $path = OgImage::generate((string) $post['title'], Format::date((string) $post['published_at'], 'j F Y'), self::imageName((string) $post['slug'], (string) $post['title']));
+        $path = OgImage::generate((string) $post['title'], Format::date((string) $post['published_at'], 'j F Y'), self::imageName((string) $post['slug'], (string) $post['title'], $postId));
         if ($path !== null) {
             Database::update('posts', ['image_path' => $path, 'updated_at' => Date::now()], 'id = ?', [$postId]);
             if (is_string($old) && $old !== $path) {
-                OgImage::delete($old); // a new title => new file name, so share caches refresh
+                self::deleteImage($old, $postId); // a new title => new file name, so share caches refresh
             }
         }
         return $path;
     }
 
     /**
-     * Daily limit / interval / window check.
+     * Delete the OG image file of post $postId unless another post still uses it (names made
+     * before they carried the post id could be shared by posts with the same long title).
+     */
+    public static function deleteImage(?string $path, int $postId): void
+    {
+        if ($path === null || $path === '' || Database::fetchValue('SELECT 1 FROM posts WHERE image_path = ? AND id <> ?', [$path, $postId]) !== null) {
+            return;
+        }
+        OgImage::delete($path);
+    }
+
+    /**
+     * spinner.enabled / daily limit / interval / window check (automatic publishing only;
+     * an admin "Şimdi yayınla" bypasses it).
      *
      * @return array{ok: bool, reason: string}
      */
     public function gate(): array
     {
+        $spinner = Settings::get('spinner.enabled', Config::get('spinner.enabled', true));
+        if (in_array($spinner, [false, 0, '0', 'false'], true)) {
+            return ['ok' => false, 'reason' => 'Otomatik yayın kapalı (spinner.enabled = false).'];
+        }
         $limit = (int) Settings::get('news.daily_limit', Config::get('news.daily_limit', 10));
         [$from, $to] = self::dayBoundsUtc();
         $today = $this->posts->countSpunBetween($from, $to);
@@ -189,6 +226,9 @@ final class NewsPublisher
             if (!SourceRegistry::hasText((string) $row['source'])) {
                 continue;
             }
+            if ((int) $row['attempts'] > 0 && str_contains((string) $row['note'], 'no-text') && ArticleExtractor::failedRecently((string) $row['url'])) {
+                continue; // retried once the cached fetch failure expires: MAX_ATTEMPTS counts real fetches
+            }
             $age = max(0.0, (time() - (int) strtotime(($row['published_at'] ?? $row['fetched_at']) . ' UTC')) / 3600);
             $score = 3.0 * min(5, $sizes[(int) $row['id']] ?? 0)
                 + max(0.0, ($maxAge - $age) / max(1, $maxAge)) * 4.0
@@ -199,6 +239,26 @@ final class NewsPublisher
         }
         usort($scored, static fn (array $a, array $b): int => $b['score'] <=> $a['score']);
         return array_map(static fn (array $s): array => $s['row'], array_slice($scored, 0, $limit));
+    }
+
+    /**
+     * Id of the live post that already covers $item's story: the post of its published cluster
+     * primary ('cluster:N'), or the manual post a 'post:N' note names; null otherwise.
+     */
+    public function storyPost(array $item): ?int
+    {
+        $note = (string) ($item['note'] ?? '');
+        if (preg_match('/^post:(\d+)/', $note, $m) === 1) {
+            $postId = Database::fetchValue("SELECT id FROM posts WHERE id = ? AND status = 'published'", [(int) $m[1]]);
+        } elseif (($primary = Clusterer::primaryFromNote($note)) !== null && $primary !== (int) $item['id']) {
+            $postId = Database::fetchValue(
+                "SELECT p.id FROM news_items n JOIN posts p ON p.id = n.post_id WHERE n.id = ? AND n.status = 'published' AND p.status = 'published'",
+                [$primary]
+            );
+        } else {
+            return null;
+        }
+        return $postId !== null ? (int) $postId : null;
     }
 
     /** Other items of the same story cluster (excluding $item). */
@@ -225,8 +285,24 @@ final class NewsPublisher
             $this->recordFailure($item, (string) $result['reason'], $result);
             return null;
         }
+        // "Ronaldo" alone is ambiguous: the story (feed title/description + lead article text) must
+        // name Cristiano, otherwise it is another Ronaldo's (Nazário …) and would be published as his.
+        if (isset($result['source_texts'][0])) {
+            $lead = (array) ($result['lead'] ?? $item);
+            $story = implode("\n", [$item['title'], $item['description'] ?? '', $lead['title'] ?? '', $lead['description'] ?? '', (string) $result['source_texts'][0]]);
+            if (!RelevanceFilter::aboutCristiano($story)) {
+                $this->recordFailure($item, 'off-topic', []);
+                return null;
+            }
+        }
 
-        $postId = Database::transaction(function () use ($item, $members, $result): int {
+        // Scraped-content gate (Google spam policy): a post that still shares too many word 6-grams
+        // with a source, or copies a long run verbatim, is published noindex (kept out of the
+        // sitemaps and IndexNow) until an editor rewrites it and re-enables indexing.
+        $copy = isset($result['source_texts']) ? CopyCheck::measure((string) $result['body'], (array) $result['source_texts']) : null;
+        $indexable = self::indexSpunPosts() && ($copy === null || $copy['ok']);
+
+        $postId = Database::transaction(function () use ($item, $members, $result, $indexable, $copy): int {
             $now = Date::now();
             $slug = $this->posts->uniqueSlug((string) $result['title']);
             $names = array_values(array_unique(array_column($result['sources'], 'name')));
@@ -234,7 +310,7 @@ final class NewsPublisher
                 'news_item_id' => (int) $item['id'],
                 'slug' => $slug,
                 'title' => mb_substr((string) $result['title'], 0, 255),
-                'meta_title' => mb_substr((string) $result['meta_title'], 0, 255),
+                'meta_title' => mb_substr(PostMeta::title((string) ($result['meta_title'] ?? ''), (string) $result['title']), 0, 255),
                 'summary' => mb_substr((string) $result['summary'], 0, 500),
                 'body' => (string) $result['body'],
                 'tags' => Tagger::toColumn($result['tags']) ?: null,
@@ -245,14 +321,15 @@ final class NewsPublisher
                 'is_spun' => 1,
                 'uniqueness' => (float) $result['uniqueness'],
                 'source_count' => (int) $result['source_count'],
-                'is_indexable' => self::indexSpunPosts() ? 1 : 0,
+                'is_indexable' => $indexable ? 1 : 0,
                 'status' => 'published',
                 'views' => 0,
                 'published_at' => $now,
                 'updated_at' => $now,
                 'created_at' => $now,
             ]);
-            Database::update('news_items', ['status' => 'published', 'post_id' => $postId, 'note' => null], 'id = ?', [(int) $item['id']]);
+            $note = $copy !== null && !$copy['ok'] ? mb_substr('noindex: ' . CopyCheck::describe($copy), 0, 255) : null;
+            Database::update('news_items', ['status' => 'published', 'post_id' => $postId, 'note' => $note], 'id = ?', [(int) $item['id']]);
             // Every other item of the story is covered now.
             foreach ($members as $member) {
                 if (in_array($member['status'], ['pending', 'failed'], true)) {
@@ -264,18 +341,20 @@ final class NewsPublisher
         });
 
         $post = Database::fetchOne('SELECT slug, title, published_at FROM posts WHERE id = ?', [$postId]);
-        $image = OgImage::generate((string) $result['title'], Format::date((string) $post['published_at'], 'j F Y'), self::imageName((string) $post['slug'], (string) $result['title']));
+        $image = OgImage::generate((string) $result['title'], Format::date((string) $post['published_at'], 'j F Y'), self::imageName((string) $post['slug'], (string) $result['title'], (int) $postId));
         if ($image !== null) {
             Database::update('posts', ['image_path' => $image], 'id = ?', [$postId]);
         }
-        if ((bool) self::indexSpunPosts()) {
+        if ($indexable) {
             IndexNow::ping([url('/haber/' . $post['slug'])]);
         }
         Log::info('news', 'published post', [
             'post' => $postId, 'item' => (int) $item['id'], 'slug' => $post['slug'],
             'uniqueness' => $result['uniqueness'], 'sources' => $result['source_count'], 'words' => $result['words'],
+            'indexable' => $indexable, 'shared_6grams' => $copy['shared'] ?? null, 'verbatim_run' => $copy['run'] ?? null,
         ]);
-        $this->message = sprintf('Yayınlandı: %s (özgünlük %%%s, %d kaynak).', $post['title'], number_format((float) $result['uniqueness'], 1, ',', ''), $result['source_count']);
+        $this->message = sprintf('Yayınlandı: %s (özgünlük %%%s, %d kaynak).', $post['title'], number_format((float) $result['uniqueness'], 1, ',', ''), $result['source_count'])
+            . ($copy !== null && !$copy['ok'] ? ' Noindex: ' . CopyCheck::describe($copy) . '.' : '');
         return (int) $postId;
     }
 
@@ -291,22 +370,17 @@ final class NewsPublisher
             'status' => $final ? 'failed' : (string) $item['status'],
             'note' => mb_substr($note, 0, 255),
         ], 'id = ?', [(int) $item['id']]);
-        $labels = [
-            'no-text' => 'kaynak metni alınamadı',
-            'low-uniqueness' => 'özgünlük eşiğin altında',
-            'too-short' => 'metin çok kısa',
-            'title-too-similar' => 'başlık kaynağa çok benziyor',
-            'off-topic' => 'kaynak metni Ronaldo ile ilgili değil',
-            'error' => 'beklenmeyen hata',
-        ];
-        $this->message = ($labels[$reason] ?? $reason) . (isset($result['uniqueness']) ? ' (%' . $result['uniqueness'] . ')' : '');
+        $this->message = (self::REASONS[$reason] ?? $reason) . (isset($result['uniqueness']) ? ' (%' . $result['uniqueness'] . ')' : '');
         Log::info('news', 'item not published', ['item' => (int) $item['id'], 'reason' => $reason, 'uniqueness' => $result['uniqueness'] ?? null, 'words' => $result['words'] ?? null]);
     }
 
-    /** OG image file name: slug + short title hash (changes when the title is edited). */
-    public static function imageName(string $slug, string $title): string
+    /**
+     * OG image file name: post id (unique even when two long slugs share their first 80
+     * characters) + slug + short title hash (changes when the title is edited).
+     */
+    public static function imageName(string $slug, string $title, int $postId): string
     {
-        return 'haber-' . substr($slug, 0, 100) . '-' . substr(sha1($title), 0, 6);
+        return 'haber-' . $postId . '-' . substr($slug, 0, 80) . '-' . substr(sha1($title), 0, 6);
     }
 
     private static function indexSpunPosts(): bool

@@ -3,7 +3,7 @@
  * /odeme/sonuc/{key} — landing page after a payment attempt (noindex).
  *
  * @var array<string, mixed> $order
- * @var string $state paid|failed|pending|transfer
+ * @var string $state paid|failed|pending|review|transfer
  * @var string $methodLabel
  * @var string $payUrl
  * @var string $statusUrl
@@ -28,6 +28,9 @@ $icon = match ($state) {
       <?php elseif ($state === 'transfer'): ?>
       <h1>Siparişiniz alındı</h1>
       <p class="lead">Havale/EFT ödemeniz hesabımıza ulaştığında siparişiniz onaylanacak. Açıklamaya <strong><?= e($order['order_no']) ?></strong> yazmayı unutmayın.</p>
+      <?php elseif ($state === 'review'): ?>
+      <h1>Ödemeniz kontrol ediliyor</h1>
+      <p class="lead">Ödeme bildiriminiz bize ulaştı. Ödeme sağlayıcısının panelinden kontrol edildikten sonra siparişiniz onaylanacak; durumu sipariş durumu sayfanızdan takip edebilirsiniz. Sipariş numaranız: <strong><?= e($order['order_no']) ?></strong>.</p>
       <?php else: ?>
       <h1>Ödemeniz kontrol ediliyor</h1>
       <p class="lead">Ödeme sağlayıcısından onay bekleniyor; bu birkaç saniye sürebilir ve sayfa kendiliğinden yenilenir. Sipariş numaranız: <strong><?= e($order['order_no']) ?></strong>.</p>

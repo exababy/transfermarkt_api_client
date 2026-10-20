@@ -97,7 +97,7 @@ final class OrdersController
             return Response::notFound();
         }
         $back = Response::redirect(url('/admin/siparisler/' . $order['id']));
-        $action = (string) $request->input('_action', 'status');
+        $action = AdminPage::input($request, '_action'); // '' => status form (array inputs read as '')
         $user = Auth::user()['username'] ?? null;
 
         if ($action === 'mark_paid') {
@@ -105,9 +105,9 @@ final class OrdersController
                 'gateway' => $order['payment_method'],
                 'manual' => true,
                 'by' => $user,
-                'note' => mb_substr(trim((string) $request->input('payment_note', '')), 0, 200),
+                'note' => mb_substr(AdminPage::input($request, 'payment_note'), 0, 200),
                 'received_at' => gmdate('c'),
-            ], JSON_UNESCAPED_UNICODE) ?: null)) {
+            ], JSON_UNESCAPED_UNICODE) ?: null, ['bekliyor', 'basarisiz', 'iade'])) {
                 Log::info('admin', 'Order marked paid manually', ['order_no' => $order['order_no'], 'user' => $user]);
                 $fresh = $repo->find($order['id']);
                 if ($fresh !== null) {
@@ -121,13 +121,13 @@ final class OrdersController
         }
 
         if ($action === 'payment') {
-            $status = (string) $request->input('payment_status', '');
+            $status = AdminPage::input($request, 'payment_status');
             if (!isset(Shop::PAYMENT_STATUSES[$status])) {
                 Session::flash('error', 'Geçersiz ödeme durumu.');
                 return $back;
             }
             if ($status === 'odendi') {
-                $repo->markPaid($order['id'], $order['payment_ref'] ?? ('manual:' . ($user ?? 'admin')), $order['payment_payload'] ?? null);
+                $repo->markPaid($order['id'], $order['payment_ref'] ?? ('manual:' . ($user ?? 'admin')), $order['payment_payload'] ?? null, ['bekliyor', 'basarisiz', 'iade']);
             } else {
                 $repo->update($order['id'], ['payment_status' => $status] + ($status === 'bekliyor' ? ['paid_at' => null] : []));
             }
@@ -136,8 +136,8 @@ final class OrdersController
             return $back;
         }
 
-        $status = (string) $request->input('status', '');
-        $tracking = mb_substr(trim((string) $request->input('cargo_tracking', '')), 0, 100);
+        $status = AdminPage::input($request, 'status');
+        $tracking = mb_substr(AdminPage::input($request, 'cargo_tracking'), 0, 100);
         if (!isset(Shop::STATUSES[$status])) {
             Session::flash('error', 'Geçersiz sipariş durumu.');
             return $back;
@@ -146,12 +146,17 @@ final class OrdersController
             Session::flash('error', 'Kargo takip bilgisi yalnızca harf, rakam ve - . / : # içerebilir.');
             return $back;
         }
+        // Re-activating a cancelled order takes its units again: refused when they were sold meanwhile
+        // (atomic "stock >= quantity" update, a no-op for "on order" products).
+        if ($order['status'] === 'iptal' && $status !== 'iptal'
+            && !(new ProductRepository())->reserveStock((int) $order['product_id'], (int) $order['quantity'])) {
+            Session::flash('error', 'Stok yetersiz: ürünün kalan stoğu bu siparişi karşılamıyor, sipariş iptal durumunda bırakıldı.');
+            return $back;
+        }
         $repo->update($order['id'], ['status' => $status, 'cargo_tracking' => $tracking !== '' ? $tracking : null]);
         if ($status === 'iptal' && $order['status'] !== 'iptal') {
             // Give a limited stock back (no-op for "on order" products).
             \App\Core\Database::execute('UPDATE products SET stock = stock + ? WHERE id = ? AND stock IS NOT NULL', [$order['quantity'], $order['product_id']]);
-        } elseif ($order['status'] === 'iptal' && $status !== 'iptal') {
-            \App\Core\Database::execute('UPDATE products SET stock = stock - ? WHERE id = ? AND stock IS NOT NULL', [$order['quantity'], $order['product_id']]);
         }
         Log::info('admin', 'Order status changed', ['order_no' => $order['order_no'], 'from' => $order['status'], 'to' => $status, 'user' => $user]);
         Session::flash('success', 'Sipariş durumu güncellendi: ' . Shop::statusLabel($status) . '.');

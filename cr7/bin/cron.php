@@ -4,7 +4,7 @@
  *
  *   php bin/cron.php [task|all] [--force]
  *
- * Tasks: tm-sync, news-fetch, news-publish, videos-sync. Without --force a task runs
+ * Tasks: tm-sync, news-fetch, news-publish, videos-sync, shop-expire. Without --force a task runs
  * only when its interval has elapsed. Recommended crontab (every 10 minutes):
  *   * /10 * * * * /usr/bin/php /home/USER/cr7/bin/cron.php >/dev/null 2>&1   (without the space)
  */

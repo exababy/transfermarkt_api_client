@@ -27,8 +27,8 @@
   <div class="container">
     <h2 id="tag-list-title" class="visually-hidden"><?= e($name) ?> haberleri listesi</h2>
     <div class="grid grid-3">
-      <?php foreach ($posts as $post): ?>
-      <?= partial('partials/news-card', ['post' => $post, 'headingTag' => 'h3']) ?>
+      <?php foreach ($posts as $i => $post): ?>
+      <?= partial('partials/news-card', ['post' => $post, 'headingTag' => 'h3', 'priority' => $i === 0, 'lazy' => $i >= 3]) ?>
       <?php endforeach; ?>
     </div>
     <?= partial('partials/pagination', ['current' => $page, 'total' => $pages, 'baseUrl' => $baseUrl]) ?>

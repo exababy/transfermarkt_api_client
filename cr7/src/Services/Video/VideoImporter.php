@@ -92,7 +92,7 @@ final class VideoImporter
             $urls = [];
             foreach ($ids as $id) {
                 $row = $repo->find((int) $id);
-                if ($row !== null && $row['status'] === VideoRepository::STATUS_PUBLISHED) {
+                if ($row !== null && $row['status'] === VideoRepository::STATUS_PUBLISHED && !empty($row['is_indexable'])) {
                     $urls[] = url($row['url']);
                 }
             }

@@ -12,6 +12,7 @@ use App\Repositories\StatsRepository;
 use App\Support\Format;
 use App\Support\Html;
 use App\Support\Log;
+use App\Support\OgImage;
 use App\Support\Str;
 
 /**
@@ -32,6 +33,7 @@ final class LifeController
         'https://x.com/Cristiano',
         'https://www.facebook.com/Cristiano',
         'https://www.youtube.com/@cristiano',
+        'https://www.transfermarkt.com.tr/cristiano-ronaldo/profil/spieler/8198',
     ];
 
     /** Credit line required when the Transfermarkt portrait is shown. */
@@ -83,10 +85,12 @@ final class LifeController
             $jsonLd[] = ['@type' => 'FAQPage', 'mainEntity' => $faqSchema];
         }
 
+        $card = OgImage::page('hayati', 'Cristiano Ronaldo’nun Hayatı', 'Biyografi ve aile', 'HAYATI');
         $seo = new Seo(
             title: 'Cristiano Ronaldo’nun Hayatı: Biyografi, Ailesi, Kariyeri',
             description: 'Cristiano Ronaldo’nun hayatı: Madeira’daki çocukluğu, ailesi, kalp ameliyatı, çocukları, serveti, rekorları ve CR7 hakkında merak edilen tüm sorular.',
             canonical: url('/hayati'),
+            image: $card,
             type: 'profile',
             jsonLd: $jsonLd,
             breadcrumbs: [['name' => 'Hayatı', 'url' => '/hayati']],
@@ -95,6 +99,7 @@ final class LifeController
                 ['property' => 'profile:first_name', 'content' => 'Cristiano'],
                 ['property' => 'profile:last_name', 'content' => 'Ronaldo'],
                 ['property' => 'profile:gender', 'content' => 'male'],
+                ...OgImage::meta($card),
             ],
         );
 
@@ -190,6 +195,22 @@ final class LifeController
         return null;
     }
 
+    /** Stable @id of the Cristiano Ronaldo Person entity (defined in full on /hayati). */
+    public static function personId(): string
+    {
+        return url('/hayati') . '#cristiano-ronaldo';
+    }
+
+    /**
+     * Compact reference to the same Person entity for `about` / `athlete` properties on other pages.
+     *
+     * @return array<string, mixed>
+     */
+    public static function personRef(): array
+    {
+        return ['@type' => 'Person', '@id' => self::personId(), 'name' => 'Cristiano Ronaldo', 'url' => url('/hayati'), 'sameAs' => self::SAME_AS];
+    }
+
     /**
      * schema.org Person for Cristiano Ronaldo. $rich adds description, address, awards and teams (/hayati).
      *
@@ -200,7 +221,7 @@ final class LifeController
         $height = !empty($player['height_cm']) ? (int) $player['height_cm'] : 187;
         $schema = [
             '@type' => 'Person',
-            '@id' => url('/hayati') . '#cristiano-ronaldo',
+            '@id' => self::personId(),
             'name' => 'Cristiano Ronaldo',
             'alternateName' => ['CR7', !empty($player['full_name']) ? (string) $player['full_name'] : 'Cristiano Ronaldo dos Santos Aveiro'],
             'birthDate' => !empty($player['birth_date']) ? substr((string) $player['birth_date'], 0, 10) : '1985-02-05',

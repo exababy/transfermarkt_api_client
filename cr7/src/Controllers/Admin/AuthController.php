@@ -10,7 +10,6 @@ use App\Core\Database;
 use App\Core\Request;
 use App\Core\Response;
 use App\Core\Session;
-use App\Support\Date;
 use App\Support\Log;
 
 /**
@@ -86,7 +85,8 @@ final class AuthController
         Csrf::check($request);
         $user = Auth::user();
         $ip = $request->ip();
-        if (Auth::tooManyAttempts($ip)) {
+        $attempt = Auth::reserveAttempt($ip, (string) $user['username']); // counted before the check (no race)
+        if ($attempt === null) {
             return $this->passwordPage(['current_password' => self::throttleMessage()], 429);
         }
 
@@ -100,8 +100,9 @@ final class AuthController
         $errors = [];
         $hash = (string) Database::fetchValue('SELECT password_hash FROM users WHERE id = ?', [(int) $user['id']]);
         if ($current === '' || !password_verify($current, $hash)) {
-            Database::insert('login_attempts', ['ip' => $ip, 'username' => mb_substr((string) $user['username'], 0, 50), 'attempted_at' => Date::now()]);
-            $errors['current_password'] = 'Mevcut şifre hatalı.';
+            $errors['current_password'] = 'Mevcut şifre hatalı.'; // the reserved attempt stays as a failure
+        } else {
+            Auth::releaseAttempt($attempt);
         }
         if (mb_strlen($new) < self::MIN_PASSWORD_LENGTH) {
             $errors['new_password'] = 'Yeni şifre en az ' . self::MIN_PASSWORD_LENGTH . ' karakter olmalıdır.';
@@ -117,9 +118,11 @@ final class AuthController
             return $this->passwordPage($errors, 422);
         }
 
-        Database::update('users', ['password_hash' => password_hash($new, PASSWORD_DEFAULT)], 'id = ?', [(int) $user['id']]);
-        Database::execute('DELETE FROM login_attempts WHERE ip = ?', [$ip]);
+        $newHash = password_hash($new, PASSWORD_DEFAULT);
+        Database::update('users', ['password_hash' => $newHash], 'id = ?', [(int) $user['id']]);
+        Auth::clearAttempts($ip);
         Session::regenerate();
+        Auth::rememberPassword($newHash); // keeps this session; every other session of the user is logged out
         Csrf::regenerate();
         Log::info('admin', 'password changed', ['user' => (int) $user['id'], 'ip' => $ip]);
         Session::flash('success', 'Şifreniz güncellendi.');

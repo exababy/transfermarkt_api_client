@@ -109,16 +109,23 @@ final class OrderRepository
 
     /**
      * Mark an order paid exactly once (idempotent): returns true only for the call that changed it.
-     * A new order moves to 'onaylandi' at the same time.
+     * A new order moves to 'onaylandi' at the same time. Only a waiting or failed order can become paid, so a
+     * replayed/late gateway callback never revives a refunded ('iade') order; the admin may pass 'iade' in $from.
+     *
+     * @param list<string> $from payment statuses the order may be in
      */
-    public function markPaid(int $id, ?string $ref, ?string $payload): bool
+    public function markPaid(int $id, ?string $ref, ?string $payload, array $from = ['bekliyor', 'basarisiz']): bool
     {
+        $from = array_values(array_intersect($from, ['bekliyor', 'basarisiz', 'iade']));
+        if ($from === []) {
+            return false;
+        }
         $now = Date::now();
         return Database::execute(
             "UPDATE orders SET payment_status = 'odendi', paid_at = ?, payment_ref = COALESCE(?, payment_ref), payment_payload = ?, "
             . "status = CASE WHEN status = 'yeni' THEN 'onaylandi' ELSE status END, updated_at = ? "
-            . "WHERE id = ? AND payment_status <> 'odendi'",
-            [$now, $ref !== null ? mb_substr($ref, 0, 190) : null, $payload, $now, $id]
+            . 'WHERE id = ? AND payment_status IN (' . implode(', ', array_fill(0, count($from), '?')) . ')',
+            [$now, $ref !== null ? mb_substr($ref, 0, 190) : null, $payload, $now, $id, ...$from]
         ) === 1;
     }
 
@@ -127,6 +134,19 @@ final class OrderRepository
     {
         return Database::execute(
             "UPDATE orders SET payment_status = 'basarisiz', payment_ref = COALESCE(?, payment_ref), payment_payload = ?, updated_at = ? "
+            . "WHERE id = ? AND payment_status IN ('bekliyor', 'basarisiz')",
+            [$ref !== null ? mb_substr($ref, 0, 190) : null, $payload, Date::now(), $id]
+        ) === 1;
+    }
+
+    /**
+     * A gateway reported a payment it cannot prove (Shopier return): keep the order waiting with the report
+     * stored for the owner to verify. Returns true when the order was updated.
+     */
+    public function markReview(int $id, ?string $ref, ?string $payload): bool
+    {
+        return Database::execute(
+            "UPDATE orders SET payment_status = 'bekliyor', payment_ref = COALESCE(?, payment_ref), payment_payload = ?, updated_at = ? "
             . "WHERE id = ? AND payment_status IN ('bekliyor', 'basarisiz')",
             [$ref !== null ? mb_substr($ref, 0, 190) : null, $payload, Date::now(), $id]
         ) === 1;

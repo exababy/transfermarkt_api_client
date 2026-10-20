@@ -403,3 +403,14 @@ CREATE TABLE IF NOT EXISTS orders (
   KEY idx_orders_status (status, created_at),
   KEY idx_orders_payment_status (payment_status)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- Old slugs of renamed posts/products: the public page answers 301 to the current URL.
+CREATE TABLE IF NOT EXISTS slug_redirects (
+  id INT UNSIGNED NOT NULL AUTO_INCREMENT,
+  entity VARCHAR(20) NOT NULL,
+  old_slug VARCHAR(190) NOT NULL,
+  target_id INT UNSIGNED NOT NULL,
+  created_at DATETIME NOT NULL,
+  PRIMARY KEY (id),
+  UNIQUE KEY uq_slug_redirects (entity, old_slug)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;

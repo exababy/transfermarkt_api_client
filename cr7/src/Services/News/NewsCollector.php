@@ -113,7 +113,7 @@ final class NewsCollector
         }
 
         $storyText = $title . ' ' . ($isEvidence ? implode(' ', $related) : (string) $item['description']);
-        $matches = Clusterer::matches([$title, ...$related], $storyText, $this->recentCandidates());
+        $matches = Clusterer::matches([$title, ...$related], $storyText, $this->recentCandidates(), null, $publishedAt ?? Date::now());
         $status = $isEvidence ? 'skipped' : 'pending';
         $note = $isEvidence ? 'evidence-only' : null;
         $result = $isEvidence ? 'evidence' : 'pending';
@@ -209,6 +209,7 @@ final class NewsCollector
             'source' => (string) $item['source'],
             'note' => $note,
             'status' => $status,
+            'published_at' => $publishedAt ?? Date::now(),
         ];
         return $result;
     }
@@ -258,7 +259,7 @@ final class NewsCollector
         $since = Date::ago(Clusterer::WINDOW_HOURS * 3600);
         $this->recent = [];
         $rows = Database::fetchAll(
-            'SELECT id, source, title, description, note, status FROM news_items WHERE fetched_at >= ? OR published_at >= ? ORDER BY id',
+            'SELECT id, source, title, description, note, status, published_at, fetched_at FROM news_items WHERE fetched_at >= ? OR published_at >= ? ORDER BY id',
             [$since, $since]
         );
         foreach ($rows as $row) {
@@ -273,10 +274,11 @@ final class NewsCollector
                 'source' => (string) $row['source'],
                 'note' => $row['note'] !== null ? (string) $row['note'] : null,
                 'status' => (string) $row['status'],
+                'published_at' => $row['published_at'] ?? $row['fetched_at'],
             ];
         }
-        foreach (Database::fetchAll('SELECT id, title FROM posts WHERE news_item_id IS NULL AND published_at >= ?', [$since]) as $post) {
-            $this->recent[] = ['id' => -(int) $post['id'], 'titles' => [(string) $post['title']], 'text' => '', 'source' => 'post', 'note' => null, 'status' => 'published'];
+        foreach (Database::fetchAll('SELECT id, title, published_at FROM posts WHERE news_item_id IS NULL AND published_at >= ?', [$since]) as $post) {
+            $this->recent[] = ['id' => -(int) $post['id'], 'titles' => [(string) $post['title']], 'text' => '', 'source' => 'post', 'note' => null, 'status' => 'published', 'published_at' => $post['published_at']];
         }
         return $this->recent;
     }

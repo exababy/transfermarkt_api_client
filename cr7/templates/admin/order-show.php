@@ -88,6 +88,9 @@ $unitBase = $o['unit_price'];
       <p class="muted text-sm"><?= $o['payment_method'] === 'havale'
           ? 'Hesabınıza ' . e(fmt_price($o['total'])) . ' tutarında, açıklamasında ' . e($o['order_no']) . ' yazan ödeme geldiyse işaretleyin.'
           : 'Ödemeyi ödeme sağlayıcısının panelinden doğruladıysanız elle onaylayabilirsiniz.' ?></p>
+      <?php if (!empty($o['payload']['review']) && $o['payment_status'] === 'bekliyor'): ?>
+      <p class="notice notice-warning text-sm">Müşteri “başarılı” dönüşüyle geldi<?= !empty($o['payload']['payment_id']) ? ' (ödeme no ' . e((string) $o['payload']['payment_id']) . ')' : '' ?>, ancak bu dönüş ödemeyi kanıtlamaz. Shopier satıcı panelinde <?= e($o['order_no']) ?> için <?= e(fmt_price($o['total'])) ?> tutarında ödemeyi gördükten sonra onaylayın.</p>
+      <?php endif; ?>
       <form class="form" method="post" action="<?= e(url('/admin/siparisler/' . (int) $o['id'] . '/durum')) ?>" data-confirm="<?= e($o['order_no']) ?> siparişinin ödemesi alındı olarak işaretlensin mi?">
         <?= csrf_field() ?>
         <input type="hidden" name="_action" value="mark_paid">

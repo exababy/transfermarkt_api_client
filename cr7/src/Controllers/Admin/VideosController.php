@@ -46,9 +46,10 @@ final class VideosController
         $where = ['1 = 1'];
         $params = [];
         if ($q !== '') {
-            $like = AdminPage::like($q);
-            $where[] = "(title LIKE ? ESCAPE '\\' OR channel_title LIKE ? ESCAPE '\\' OR youtube_id = ?)";
-            array_push($params, $like, $like, $q);
+            [$sql, $likeParams] = Database::containsAny(['title', 'channel_title'], $q);
+            $where[] = '(' . $sql . ' OR youtube_id = ?)';
+            array_push($params, ...$likeParams);
+            $params[] = $q;
         }
         if (array_key_exists($category, $categories)) {
             $where[] = 'category = ?';

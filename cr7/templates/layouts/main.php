@@ -9,6 +9,7 @@
  * @var string|null $extraHead trusted HTML appended to <head> (e.g. preload links)
  * @var string|null $bodyClass
  * @var bool|null $errorPage set by ErrorController: no canonical/hreflang on error responses
+ * @var bool|null $noAnalytics true => no GA4/consent banner (private order/payment pages: the URL key is the credential)
  */
 
 use App\Core\Response;
@@ -21,8 +22,18 @@ $canonical = $seo->canonicalUrl();
 $image = $seo->imageUrl();
 $ogTitle = $seo->title !== '' ? $seo->title : Seo::siteName();
 $ga4 = (string) setting('analytics.ga4_id', '');
-$ga4 = preg_match('/^G-[A-Z0-9]{4,20}$/', $ga4) === 1 ? $ga4 : '';
+$ga4 = preg_match('/^G-[A-Z0-9]{4,20}$/', $ga4) === 1 && empty($noAnalytics) ? $ga4 : '';
 $jsonFlags = JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES | JSON_HEX_TAG | JSON_HEX_AMP;
+// Webmaster tool ownership tags (admin › Ayarlar), printed on the home page only.
+$verification = [];
+if (empty($errorPage) && rtrim($canonical, '/') === rtrim(url('/'), '/')) {
+    foreach (['google-site-verification' => 'seo.google_verification', 'msvalidate.01' => 'seo.bing_verification', 'yandex-verification' => 'seo.yandex_verification'] as $metaName => $settingKey) {
+        $code = trim((string) setting($settingKey, ''));
+        if ($code !== '' && preg_match('/^[A-Za-z0-9_=+.\/-]{6,120}$/', $code) === 1) {
+            $verification[$metaName] = $code;
+        }
+    }
+}
 ?><!doctype html>
 <html lang="tr" dir="ltr">
 <head>
@@ -33,6 +44,9 @@ $jsonFlags = JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES | JSON_HEX_TAG | JS
 <meta name="description" content="<?= e($seo->description) ?>">
 <?php endif; ?>
 <meta name="robots" content="<?= e($seo->robots) ?>">
+<?php foreach ($verification as $metaName => $code): ?>
+<meta name="<?= e($metaName) ?>" content="<?= e($code) ?>">
+<?php endforeach; ?>
 <?php if (empty($errorPage)): ?>
 <link rel="canonical" href="<?= e($canonical) ?>">
 <link rel="alternate" hreflang="tr" href="<?= e($canonical) ?>">

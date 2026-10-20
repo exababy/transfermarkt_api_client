@@ -10,6 +10,8 @@ use App\Core\Seo;
 use App\Repositories\StatsRepository;
 use App\Services\Transfermarkt\TransfermarktSync;
 use App\Support\Format;
+use App\Support\OgImage;
+use App\Support\Str;
 
 /**
  * /istatistikler (overview, tabs, charts) and /istatistikler/maclar (filterable match log).
@@ -17,6 +19,9 @@ use App\Support\Format;
 final class StatsController
 {
     public const PER_PAGE = 50;
+
+    /** Competitions whose match list (?turnuva=, no other filter) is indexable and in the sitemap. */
+    public const INDEXABLE_COMPETITIONS = ['CL', 'ES1', 'GB1', 'IT1', 'SA1', 'FIWC', 'EURO'];
 
     public function index(Request $request): Response
     {
@@ -40,22 +45,30 @@ final class StatsController
 
         $career = $stats->summary('career');
         $lastSync = $stats->lastSyncedAt();
-        $description = sprintf(
-            'Cristiano Ronaldo istatistikleri: %s maçta %s gol ve %s asist. Kulüp, turnuva ve sezon bazında tablolar, yıllara göre goller, piyasa değeri ve milli takım.',
-            Format::number($career['appearances']),
-            Format::number($career['goals']),
-            Format::number($career['assists'])
-        );
+        // Before the first Transfermarkt sync there are no numbers: no "0 maçta 0 gol" claim, and the
+        // page (only a notice) stays out of the index until the data arrives.
+        $description = $lastSync === null
+            ? 'Cristiano Ronaldo istatistikleri: kulüp, turnuva ve sezon bazında maç, gol ve asist tabloları, yıllara göre goller, piyasa değeri ve milli takım.'
+            : sprintf(
+                'Cristiano Ronaldo istatistikleri: %s maçta %s gol ve %s asist. Kulüp, turnuva ve sezon bazında tablolar, yıllara göre goller, piyasa değeri ve milli takım.',
+                Format::number($career['appearances']),
+                Format::number($career['goals']),
+                Format::number($career['assists'])
+            );
+        $card = OgImage::page('istatistikler', 'Cristiano Ronaldo İstatistikleri', 'Transfermarkt verileri', 'İSTATİSTİK');
         $seo = new Seo(
             title: 'Cristiano Ronaldo İstatistikleri: Gol, Asist, Maç Sayıları',
             description: $description,
+            robots: $lastSync === null ? 'noindex,follow' : 'index,follow,max-image-preview:large',
+            image: $card,
+            extraMeta: OgImage::meta($card),
             jsonLd: [
                 [
                     '@type' => 'WebPage',
                     'name' => 'Cristiano Ronaldo İstatistikleri',
                     'url' => url('/istatistikler'),
                     'inLanguage' => 'tr-TR',
-                    'about' => ['@type' => 'Person', 'name' => 'Cristiano Ronaldo', 'sameAs' => CareerController::SAME_AS],
+                    'about' => LifeController::personRef(),
                 ] + ($lastSync !== null ? ['dateModified' => Format::iso($lastSync)] : []),
                 [
                     '@type' => 'Dataset',
@@ -93,6 +106,9 @@ final class StatsController
             'latest' => $stats->latestGames(10),
             'player' => $stats->player(),
             'lastSync' => $lastSync,
+            // Filters the match list accepts (seasons/competitions with played games): only these are linked.
+            'matchSeasons' => $stats->seasonOptions(),
+            'matchCompetitions' => $stats->competitionOptions(),
         ]);
     }
 
@@ -131,32 +147,17 @@ final class StatsController
         unset($listSelected['sayfa']);
         $listUrl = $base . self::query($listSelected);
         $canonical = $base . self::query($selected);
-        $onlySeason = !isset($selected['turnuva']) && !isset($selected['sonuc']) && !isset($selected['durum']);
-        $indexable = $total > 0 && $onlySeason && (isset($selected['sezon']) || $page === 1);
+        $noExtraFilter = !isset($selected['sonuc']) && !isset($selected['durum']);
+        $onlySeason = !isset($selected['turnuva']) && $noExtraFilter;
+        // Season pages, plus the main competitions on their own (?turnuva=CL …) with their own copy.
+        $mainCompetition = isset($selected['turnuva']) && !isset($selected['sezon']) && $noExtraFilter
+            && in_array($selected['turnuva'], self::INDEXABLE_COMPETITIONS, true);
+        $indexable = $total > 0 && (($onlySeason && (isset($selected['sezon']) || $page === 1)) || $mainCompetition);
 
         $seasonLabel = isset($selected['sezon']) ? $seasons[$selected['sezon']]['label'] : null;
         $competitionName = isset($selected['turnuva']) ? $competitions[$selected['turnuva']]['name'] : null;
-        $title = 'Cristiano Ronaldo’nun Tüm Maçları';
-        if ($seasonLabel !== null && $competitionName !== null) {
-            $title = "Ronaldo {$seasonLabel} {$competitionName} Maçları";
-        } elseif ($seasonLabel !== null) {
-            $title = "Cristiano Ronaldo {$seasonLabel} Sezonu Maçları";
-        } elseif ($competitionName !== null) {
-            $title = "Cristiano Ronaldo {$competitionName} Maçları";
-        }
-        if (mb_strlen($title) > 50) {
-            $title = $seasonLabel !== null ? "Cristiano Ronaldo {$seasonLabel} Sezonu Maçları" : 'Cristiano Ronaldo’nun Maçları';
-        }
-        if ($page > 1) {
-            $title .= ' – Sayfa ' . $page;
-        }
-        $description = sprintf(
-            'Cristiano Ronaldo%s maç maç performansı: %s maç, %s gol, %s asist. Tarih, rakip, skor, dakika ve gol bilgileriyle eksiksiz maç listesi.',
-            $seasonLabel !== null ? '’nun ' . $seasonLabel . ' sezonu' : '’nun kariyeri boyunca',
-            Format::number($totals['appearances']),
-            Format::number($totals['goals']),
-            Format::number($totals['assists'])
-        );
+        [$heading, $title] = self::matchesHeading($seasonLabel, $competitionName, $page);
+        $description = self::matchesDescription($seasonLabel, $competitionName, $totals, $page);
 
         $breadcrumbs = [['name' => 'İstatistikler', 'url' => '/istatistikler'], ['name' => 'Maçlar', 'url' => $base]];
         if ($seasonLabel !== null) {
@@ -176,7 +177,7 @@ final class StatsController
                 'name' => $title,
                 'url' => url($canonical),
                 'inLanguage' => 'tr-TR',
-                'about' => ['@type' => 'Person', 'name' => 'Cristiano Ronaldo', 'sameAs' => CareerController::SAME_AS],
+                'about' => LifeController::personRef(),
             ]],
             breadcrumbs: $breadcrumbs,
             prev: $page > 1 ? page_url($listUrl, $page - 1) : null,
@@ -198,9 +199,61 @@ final class StatsController
             'competitions' => $competitions,
             'seasonLabel' => $seasonLabel,
             'competitionName' => $competitionName,
-            'heading' => $seasonLabel !== null ? "Cristiano Ronaldo {$seasonLabel} Sezonu Maçları" : 'Cristiano Ronaldo’nun Tüm Maçları',
+            'heading' => $heading,
             'lastSync' => $stats->lastSyncedAt(),
         ]);
+    }
+
+    /**
+     * H1 and <title> of a match list: the season and/or competition it shows ("… Maçları" is not
+     * doubled for "Hazırlık Maçları"), the title shortened step by step to stay ≤ 60 characters
+     * including " – Sayfa N", never a generic title shared by several competitions.
+     *
+     * @return array{0: string, 1: string} [heading, title]
+     */
+    public static function matchesHeading(?string $seasonLabel, ?string $competitionName, int $page = 1): array
+    {
+        $matches = $competitionName !== null ? (preg_match('/Maçları$/u', $competitionName) === 1 ? $competitionName : $competitionName . ' Maçları') : null;
+        if ($seasonLabel !== null && $matches !== null) {
+            $candidates = ["Cristiano Ronaldo {$seasonLabel} {$matches}", "Ronaldo {$seasonLabel} {$matches}"];
+        } elseif ($seasonLabel !== null) {
+            $candidates = ["Cristiano Ronaldo {$seasonLabel} Sezonu Maçları"];
+        } elseif ($matches !== null) {
+            $candidates = ["Cristiano Ronaldo {$matches}", "Ronaldo {$matches}"];
+        } else {
+            $candidates = ['Cristiano Ronaldo’nun Tüm Maçları'];
+        }
+        $suffix = $page > 1 ? ' – Sayfa ' . $page : '';
+        $room = 60 - mb_strlen($suffix);
+        $title = Str::limit(end($candidates), $room);
+        foreach ($candidates as $candidate) {
+            if (mb_strlen($candidate) <= $room) {
+                $title = $candidate;
+                break;
+            }
+        }
+        return [$candidates[0] . $suffix, $title . $suffix];
+    }
+
+    /** Meta description with the totals of exactly what the list shows (≤ 160 characters). */
+    public static function matchesDescription(?string $seasonLabel, ?string $competitionName, array $totals, int $page = 1): string
+    {
+        $what = match (true) {
+            $seasonLabel !== null && $competitionName !== null => $seasonLabel . ' sezonu ' . $competitionName,
+            $seasonLabel !== null => $seasonLabel . ' sezonu',
+            $competitionName !== null => $competitionName,
+            default => 'kariyeri boyunca',
+        };
+        $what .= $competitionName !== null && preg_match('/Maçları$/u', $competitionName) !== 1 ? ' maçları' : ($competitionName === null ? ' maç maç performansı' : '');
+        $numbers = sprintf('%s maç, %s gol, %s asist.', Format::number($totals['appearances']), Format::number($totals['goals']), Format::number($totals['assists']));
+        $prefix = $page > 1 ? 'Sayfa ' . $page . ': ' : '';
+        foreach ([' Tarih, rakip, skor, dakika ve gol bilgileriyle eksiksiz maç listesi.', ' Tarih, rakip, skor ve dakikalarıyla maç listesi.', ''] as $tail) {
+            $text = $prefix . 'Cristiano Ronaldo’nun ' . $what . ': ' . $numbers . $tail;
+            if (mb_strlen($text) <= 160) {
+                return $text;
+            }
+        }
+        return Str::limit($text, 160);
     }
 
     /**

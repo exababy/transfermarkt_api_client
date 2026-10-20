@@ -10,6 +10,8 @@
 use App\Support\Format;
 
 $ratio = static fn (array $c): string => $c['appearances'] > 0 ? Format::number($c['goals'] / $c['appearances'], 2) : '–';
+// Before the first sync every card would read "0 Maç 0 Gol": hide the numbers until data exists.
+$hasStats = array_sum(array_map(static fn (array $c): int => (int) $c['appearances'], $cards)) > 0;
 ?>
 <header class="page-header">
   <div class="container">
@@ -35,11 +37,13 @@ $ratio = static fn (array $c): string => $c['appearances'] > 0 ? Format::number(
           <h3 class="card-title"><a href="<?= e(url($card['url'])) ?>"><?= e($card['name']) ?></a></h3>
           <p class="club-years mb-0"><?= e($card['period']) ?></p>
           <?php if ($card['country'] !== ''): ?><p class="meta mb-0"><span><?= e($card['country']) ?></span><?php if ($card['honours'] > 0): ?><span><?= e((string) $card['honours']) ?> kupa</span><?php endif; ?></p><?php endif; ?>
+          <?php if ($hasStats): ?>
           <div class="club-card-stats">
             <span><strong><?= e(Format::number($card['appearances'])) ?></strong>Maç</span>
             <span><strong><?= e(Format::number($card['goals'])) ?></strong>Gol</span>
             <span><strong><?= e(Format::number($card['assists'])) ?></strong>Asist</span>
           </div>
+          <?php endif; ?>
           <?php if ($card['summary'] !== ''): ?><p class="card-text"><?= e($card['summary']) ?></p><?php endif; ?>
         </div>
       </article>
@@ -54,8 +58,11 @@ $ratio = static fn (array $c): string => $c['appearances'] > 0 ? Format::number(
   <div class="container">
     <div class="section-header">
       <h2 class="section-title" id="karsilastirma-baslik">Takım Takım Karşılaştırma</h2>
-      <p class="lead">Sütun başlıklarına dokunarak tabloyu sıralayabilirsiniz.</p>
+      <?php if ($hasStats): ?><p class="lead">Sütun başlıklarına dokunarak tabloyu sıralayabilirsiniz.</p><?php endif; ?>
     </div>
+    <?php if (!$hasStats): ?>
+    <?= partial('partials/stats-empty', ['text' => 'Takım takım maç, gol, asist ve galibiyet karşılaştırması Transfermarkt ile ilk senkronizasyondan sonra burada görünecek.']) ?>
+    <?php else: ?>
     <div class="table-wrap">
       <table class="table table-sortable">
         <thead>
@@ -83,6 +90,7 @@ $ratio = static fn (array $c): string => $c['appearances'] > 0 ? Format::number(
       </table>
     </div>
     <p class="meta mt-0" style="margin-top:12px"><span>Kaynak: Transfermarkt maç kayıtları</span><?php if ($lastSync): ?><span>Son güncelleme: <?= e(Format::date($lastSync, 'j F Y H:i')) ?></span><?php endif; ?></p>
+    <?php endif; ?>
   </div>
 </section>
 <?php endif; ?>

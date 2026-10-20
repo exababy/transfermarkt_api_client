@@ -34,8 +34,9 @@ final class KitIllustrator
     public static function spec(array $spec): array
     {
         $base = self::color($spec['base'] ?? '#c8102e', '#c8102e');
+        $pattern = $spec['pattern'] ?? 'solid';
         return [
-            'pattern' => in_array($spec['pattern'] ?? 'solid', ['solid', 'hoops', 'stripes', 'halves'], true) ? $spec['pattern'] : 'solid',
+            'pattern' => in_array($pattern, ['solid', 'hoops', 'stripes', 'halves'], true) ? $pattern : 'solid',
             'base' => $base,
             'alt' => self::color($spec['alt'] ?? '#ffffff', '#ffffff'),
             'sleeves' => self::color($spec['sleeves'] ?? $base, $base),

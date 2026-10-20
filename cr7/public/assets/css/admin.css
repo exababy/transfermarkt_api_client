@@ -35,8 +35,9 @@ code { padding: 1px 5px; border-radius: 4px; background: #eceef3; font-size: .88
 
 /* ---------- Shell ---------- */
 .admin-shell { display: flex; min-height: 100vh; }
-.admin-sidebar { position: fixed; inset: 0 auto 0 0; z-index: 50; display: flex; flex-direction: column; width: 248px; padding: 18px 12px; overflow-y: auto; background: var(--a-side); transform: translateX(-100%); transition: transform .25s ease; }
-.admin-sidebar.is-open { transform: none; box-shadow: 0 0 0 100vmax rgba(0, 0, 0, .45); }
+.admin-sidebar { position: fixed; inset: 0 auto 0 0; z-index: 50; display: flex; flex-direction: column; width: 248px; padding: 18px 12px; overflow-y: auto; background: var(--a-side); transform: translateX(-100%); visibility: hidden; transition: transform .25s ease, visibility 0s linear .25s; }
+/* Closed off-canvas sidebar is visibility:hidden, so its links leave the tab order (after the slide-out). */
+.admin-sidebar.is-open { transform: none; visibility: visible; box-shadow: 0 0 0 100vmax rgba(0, 0, 0, .45); transition: transform .25s ease, visibility 0s; }
 .admin-brand { display: flex; align-items: center; gap: 10px; margin: 0 8px 22px; color: #fff; font-weight: 750; text-decoration: none; }
 .admin-brand span { color: var(--a-side-text); font-size: .85rem; letter-spacing: .08em; text-transform: uppercase; }
 .admin-nav { list-style: none; margin: 0; padding: 0; display: grid; gap: 2px; }
@@ -55,7 +56,7 @@ code { padding: 1px 5px; border-radius: 4px; background: #eceef3; font-size: .88
 .admin-section { margin-bottom: 24px; }
 @media (min-width: 960px) {
   .admin-shell { background: linear-gradient(90deg, var(--a-side) 248px, transparent 248px); }
-  .admin-sidebar { position: sticky; top: 0; height: 100vh; transform: none; }
+  .admin-sidebar { position: sticky; top: 0; height: 100vh; transform: none; visibility: visible; transition: none; }
   .admin-menu-toggle { display: none; }
   .admin-content { padding: 28px 32px 56px; }
 }
@@ -77,6 +78,9 @@ code { padding: 1px 5px; border-radius: 4px; background: #eceef3; font-size: .88
 @media (min-width: 640px) { .grid-2, .grid-3, .grid-4 { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
 @media (min-width: 1100px) { .grid-3 { grid-template-columns: repeat(3, minmax(0, 1fr)); } .grid-4 { grid-template-columns: repeat(4, minmax(0, 1fr)); } }
 .stat-grid { display: grid; gap: 14px; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); margin-bottom: 20px; }
+/* Six dashboard tiles: 3 + 3 until all six fit in one row (auto-fit left a lone tile as 5 + 1). */
+@media (min-width: 720px) { .stat-grid[data-count="6"] { grid-template-columns: repeat(3, minmax(0, 1fr)); } }
+@media (min-width: 1440px) { .stat-grid[data-count="6"] { grid-template-columns: repeat(6, minmax(0, 1fr)); } }
 .stat-card { padding: 16px; border: 1px solid var(--a-border); border-radius: var(--a-radius); background: var(--a-surface); box-shadow: var(--a-shadow); }
 .stat-card .stat-value { display: block; font-size: 1.7rem; font-weight: 800; font-variant-numeric: tabular-nums; }
 .stat-card .stat-label { color: var(--a-muted); font-size: .8rem; font-weight: 650; letter-spacing: .05em; text-transform: uppercase; }
@@ -95,8 +99,9 @@ code { padding: 1px 5px; border-radius: 4px; background: #eceef3; font-size: .88
 .btn:hover { border-color: #c4c8d2; background: #f8f9fb; color: var(--a-text); }
 .btn-primary { border-color: var(--a-primary); background: var(--a-primary); color: #fff; }
 .btn-primary:hover { border-color: #000; background: #000; color: #fff; }
-.btn-gold { border-color: var(--a-gold); background: var(--a-gold); color: #fff; }
-.btn-gold:hover { border-color: var(--a-gold-strong); background: var(--a-gold-strong); color: #fff; }
+/* Dark text on gold like the public theme (6.3:1; white on this gold is only 2.98:1). */
+.btn-gold { border-color: var(--a-gold); background: var(--a-gold); color: #141005; }
+.btn-gold:hover { border-color: #a37f1b; background: #a37f1b; color: #141005; }
 .btn-outline { background: transparent; }
 .btn-danger { border-color: #f3c4c0; background: #fff5f4; color: var(--a-danger); }
 .btn-danger:hover { border-color: var(--a-danger); background: var(--a-danger); color: #fff; }
@@ -112,7 +117,8 @@ code { padding: 1px 5px; border-radius: 4px; background: #eceef3; font-size: .88
 .actions form { margin: 0; }
 
 /* ---------- Tables ---------- */
-.table-wrap { overflow-x: auto; border: 1px solid var(--a-border); border-radius: var(--a-radius); background: var(--a-surface); }
+/* position:relative keeps absolutely positioned descendants (.visually-hidden header labels) inside the scroller. */
+.table-wrap { position: relative; overflow-x: auto; border: 1px solid var(--a-border); border-radius: var(--a-radius); background: var(--a-surface); }
 .table { width: 100%; border-collapse: collapse; font-size: .9rem; }
 .table th, .table td { padding: 10px 12px; border-bottom: 1px solid var(--a-border); text-align: left; vertical-align: middle; }
 .table thead th { background: #f8f9fb; color: var(--a-muted); font-size: .75rem; font-weight: 700; letter-spacing: .05em; text-transform: uppercase; white-space: nowrap; }
@@ -233,6 +239,8 @@ legend { padding: 0 6px; font-weight: 700; }
 .cell-message { min-width: 220px; max-width: 420px; color: #3b3f4a; font-size: .84rem; overflow-wrap: anywhere; }
 .cell-actions { text-align: right; white-space: nowrap; }
 .cell-actions .actions { flex-wrap: nowrap; justify-content: flex-end; }
+/* Queue rows have one or two actions: start-aligned so "Şimdi yayınla" stays in the same place on every row. */
+.queue-table .cell-actions .actions { justify-content: flex-start; }
 .table td .badge + .badge { margin-left: 4px; }
 .table tbody th { font-weight: 650; }
 .clamp-2 { display: -webkit-box; overflow: hidden; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }

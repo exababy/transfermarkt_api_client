@@ -125,6 +125,7 @@ $clock = static function (?int $seconds): string {
             <a href="<?= e($editUrl) ?>"><?= e($video['title']) ?></a>
             <span class="cell-sub"><?= e($video['channel_title'] ?: 'Kanal bilinmiyor') ?> · <span class="mono"><?= e($video['youtube_id']) ?></span></span>
             <?php if ((int) $video['is_featured'] === 1): ?><span class="badge badge-warning">★ Öne çıkan</span><?php endif; ?>
+            <?php if (!\App\Services\Video\VideoText::looksTurkish((string) $video['title'])): ?><span class="badge badge-muted" title="Türkçe başlık verilene kadar arama motorlarına kapalı ve video site haritasının dışında">noindex · Türkçe başlık yok</span><?php endif; ?>
           </span>
         </td>
         <td data-label="Kategori" class="nowrap"><?= e($categories[$video['category']] ?? $video['category']) ?></td>

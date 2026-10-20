@@ -24,6 +24,7 @@ $showAll = ($selected['durum'] ?? null) === 'tumu';
 $from = $total > 0 ? ($page - 1) * 50 + 1 : 0;
 $to = min($total, $page * 50);
 $hasFilter = array_diff_key($selected, ['sayfa' => true]) !== [];
+$noData = $seasons === [] && $competitions === []; // no games stored yet (before the first sync)
 ?>
 <header class="page-header">
   <div class="container">
@@ -79,12 +80,14 @@ $hasFilter = array_diff_key($selected, ['sayfa' => true]) !== [];
       </div>
     </form>
     <p class="form-help">Boş bırakılan alanlar dikkate alınmaz; sayfa yenilendiğinde adres sadeleştirilir.</p>
+    <?php if (!$noData): ?>
     <div class="stat-tiles">
       <?= partial('partials/stat-tile', ['value' => $totals['appearances'], 'label' => 'Maç', 'sub' => Format::number($totals['minutes']) . ' dakika']) ?>
       <?= partial('partials/stat-tile', ['value' => $totals['goals'], 'label' => 'Gol', 'sub' => $totals['appearances'] > 0 ? 'Maç başına ' . Format::number($totals['goals'] / $totals['appearances'], 2) : null]) ?>
       <?= partial('partials/stat-tile', ['value' => $totals['assists'], 'label' => 'Asist']) ?>
       <?= partial('partials/stat-tile', ['value' => $totals['wins'], 'label' => 'Galibiyet', 'sub' => Format::number($totals['draws']) . ' beraberlik · ' . Format::number($totals['losses']) . ' mağlubiyet']) ?>
     </div>
+    <?php endif; ?>
   </div>
 </section>
 
@@ -94,7 +97,9 @@ $hasFilter = array_diff_key($selected, ['sayfa' => true]) !== [];
       <h2 class="section-title" id="liste-baslik">Maç Listesi</h2>
       <p class="meta mb-0"><?php if ($total > 0): ?><span><?= e(Format::number($from)) ?>–<?= e(Format::number($to)) ?> / <?= e(Format::number($total)) ?> kayıt</span><?php endif; ?><span>En yeni maç üstte</span><?php if ($lastSync): ?><span>Son güncelleme: <?= e(Format::date($lastSync, 'j F Y H:i')) ?></span><?php endif; ?></p>
     </div>
-    <?php if ($games === []): ?>
+    <?php if ($games === [] && $noData): ?>
+    <?= partial('partials/stats-empty', ['text' => 'Ronaldo’nun maç maç kayıtları Transfermarkt ile ilk senkronizasyondan sonra burada listelenecek.']) ?>
+    <?php elseif ($games === []): ?>
     <div class="empty-state">
       <h3>Bu filtrelerle eşleşen maç bulunamadı</h3>
       <p><a class="btn btn-outline" href="<?= e(url('/istatistikler/maclar')) ?>">Tüm maçları göster</a></p>

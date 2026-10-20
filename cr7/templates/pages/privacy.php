@@ -76,7 +76,7 @@ $mail = $email !== null ? '<a href="mailto:' . e($email) . '">' . e($email) . '<
         <li>Kargo ve lojistik firmaları (yalnızca sipariş teslimi için).</li>
         <li>Barındırma (hosting), e-posta ve teknik altyapı hizmeti aldığımız tedarikçiler.</li>
         <li>Talep edilmesi hâlinde yetkili kamu kurum ve kuruluşları ile yargı mercileri.</li>
-        <li>Açık rızanız olması hâlinde Google LLC (Google Analytics). Bir YouTube videosunu oynattığınızda video, Google’ın gizlilik geliştirilmiş youtube-nocookie.com alan adından yüklenir. Bu hizmetler verileri yurt dışındaki sunucularda işleyebilir; analitik çerezler yalnızca açık rızanızla çalıştırılır.</li>
+        <li>Açık rızanız olması hâlinde Google LLC (Google Analytics). Video sayfalarındaki YouTube oynatıcısı, Google’ın gizlilik geliştirilmiş youtube-nocookie.com alan adından yüklenir; bu sırada IP adresiniz ve tarayıcı bilgileriniz Google’a iletilir. Bu hizmetler verileri yurt dışındaki sunucularda işleyebilir; analitik çerezler yalnızca açık rızanızla çalıştırılır.</li>
       </ul>
 
       <h2 id="saklama">6. Saklama süreleri ve güvenlik</h2>
@@ -115,7 +115,7 @@ $mail = $email !== null ? '<a href="mailto:' . e($email) . '">' . e($email) . '<
             <?php if ($analytics): ?>
             <tr><td>_ga, _ga_*</td><td>Analitik (onaya bağlı)</td><td class="wrap">Google Analytics ile anonimleştirilmiş ziyaret istatistikleri. Yalnızca “Kabul Et” seçeneğini işaretlemeniz hâlinde yüklenir.</td><td>En fazla 2 yıl</td></tr>
             <?php endif; ?>
-            <tr><td>YouTube (Google)</td><td>Üçüncü taraf</td><td class="wrap">Bir videoyu oynatmayı seçtiğinizde youtube-nocookie.com üzerinden yüklenen oynatıcı. Oynatmadığınız sürece YouTube çerezi kullanılmaz.</td><td>Google politikasına göre</td></tr>
+            <tr><td>YouTube (Google)</td><td>Üçüncü taraf</td><td class="wrap">Video sayfalarında youtube-nocookie.com üzerinden yüklenen oynatıcı. Gizlilik geliştirilmiş modda, videoyu oynatmadığınız sürece YouTube çerezi kullanılmaz.</td><td>Google politikasına göre</td></tr>
           </tbody>
         </table>
       </div>

@@ -47,6 +47,11 @@ $shopEnabled = (bool) setting('shop.enabled', true);
         <li><a href="<?= e(url('/hakkinda')) ?>">Hakkında</a></li>
         <li><a href="<?= e(url('/iletisim')) ?>">İletişim</a></li>
         <li><a href="<?= e(url('/gizlilik-politikasi')) ?>">Gizlilik Politikası</a></li>
+        <?php if ($shopEnabled): ?>
+        <li><a href="<?= e(url('/mesafeli-satis-sozlesmesi')) ?>">Mesafeli Satış Sözleşmesi</a></li>
+        <li><a href="<?= e(url('/on-bilgilendirme-formu')) ?>">Ön Bilgilendirme Formu</a></li>
+        <li><a href="<?= e(url('/iptal-ve-iade')) ?>">İptal ve İade</a></li>
+        <?php endif; ?>
         <?php if (!empty($ga4)): ?>
         <li><button type="button" class="link-button" data-consent-open>Çerez tercihleri</button></li>
         <?php endif; ?>

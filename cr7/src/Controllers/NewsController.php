@@ -9,6 +9,7 @@ use App\Core\Response;
 use App\Core\Seo;
 use App\Core\View;
 use App\Repositories\NewsRepository;
+use App\Services\News\PostMeta;
 use App\Services\News\Tagger;
 use App\Support\Format;
 use App\Support\Str;
@@ -21,7 +22,7 @@ final class NewsController
     public const PER_PAGE = 12;
 
     /** Tag pages with fewer posts than this are noindex (thin content). */
-    public const TAG_INDEX_MIN = 3;
+    public const TAG_INDEX_MIN = Seo::LISTING_INDEX_MIN;
 
     private NewsRepository $news;
 
@@ -32,6 +33,9 @@ final class NewsController
 
     public function index(Request $request): Response
     {
+        if ($request->query('sayfa') === '1') {
+            return Response::redirect(url('/haberler'), 301); // one URL for page 1
+        }
         $page = self::page($request);
         if ($page === null) {
             return Response::notFound();
@@ -75,7 +79,8 @@ final class NewsController
         $slug = (string) $request->param('slug', '');
         $post = $slug !== '' ? $this->news->findBySlug($slug) : null;
         if ($post === null) {
-            return Response::notFound();
+            $moved = $slug !== '' ? $this->news->movedSlug($slug) : null; // renamed in the admin
+            return $moved !== null ? Response::redirect(url('/haber/' . $moved), 301) : Response::notFound();
         }
         if ($request->method() === 'GET' && !self::isBot((string) $request->header('User-Agent'))) {
             try {
@@ -125,7 +130,7 @@ final class NewsController
             'inLanguage' => 'tr-TR',
             'wordCount' => $words,
             'isAccessibleForFree' => true,
-            'about' => ['@type' => 'Person', 'name' => 'Cristiano Ronaldo', 'sameAs' => 'https://tr.wikipedia.org/wiki/Cristiano_Ronaldo'],
+            'about' => LifeController::personRef(),
         ];
         if ($tags !== []) {
             $article['keywords'] = implode(', ', array_column($tags, 'name'));
@@ -140,8 +145,8 @@ final class NewsController
         }
 
         $seo = new Seo(
-            title: (string) ($post['meta_title'] ?: $post['title']),
-            description: Str::limit((string) $post['summary'], 160),
+            title: PostMeta::title($post['meta_title'] ?? null, (string) $post['title']),
+            description: PostMeta::description((string) $post['summary'], (string) $post['body']),
             canonical: $canonical,
             image: $image,
             type: 'article',
@@ -174,6 +179,9 @@ final class NewsController
         $page = self::page($request);
         if ($name === null || $page === null) {
             return Response::notFound();
+        }
+        if ($request->query('sayfa') === '1') {
+            return Response::redirect(url('/haberler/etiket/' . $slug), 301);
         }
         $total = $this->news->countByTag($slug);
         $pages = max(1, (int) ceil($total / self::PER_PAGE));
@@ -247,16 +255,32 @@ final class NewsController
     public static function sources(array $post): array
     {
         $out = [];
-        if (preg_match('~<p><strong>Kaynak:</strong>(.*?)</p>~su', (string) $post['body'], $m) === 1
-            && preg_match_all('~<a\b[^>]*href="([^"]+)"[^>]*>(.*?)</a>~su', $m[1], $links, PREG_SET_ORDER) > 0) {
-            foreach ($links as $link) {
-                $out[] = ['url' => html_entity_decode($link[1], ENT_QUOTES | ENT_HTML5, 'UTF-8'), 'name' => html_entity_decode(strip_tags($link[2]), ENT_QUOTES | ENT_HTML5, 'UTF-8')];
+        if (preg_match('~<p><strong>Kaynak:</strong>(.*?)</p>~su', (string) $post['body'], $m) === 1) {
+            // Read the links with a DOM parser, not a regex over attributes: a title such as
+            // 'href="javascript:…"' must never be taken for the href. Only http(s) links are listed.
+            $doc = new \DOMDocument();
+            $previous = libxml_use_internal_errors(true);
+            $doc->loadHTML('<?xml encoding="UTF-8"><div>' . $m[1] . '</div>', LIBXML_NONET | LIBXML_NOERROR | LIBXML_NOWARNING);
+            libxml_clear_errors();
+            libxml_use_internal_errors($previous);
+            foreach ($doc->getElementsByTagName('a') as $a) {
+                $url = trim($a->getAttribute('href'));
+                if (self::isWebUrl($url)) {
+                    $name = trim((string) preg_replace('/\s+/u', ' ', $a->textContent));
+                    $out[] = ['url' => $url, 'name' => $name !== '' ? $name : (string) parse_url($url, PHP_URL_HOST)];
+                }
             }
         }
-        if ($out === [] && !empty($post['source_url'])) {
-            $out[] = ['url' => (string) $post['source_url'], 'name' => (string) ($post['source_name'] ?: parse_url((string) $post['source_url'], PHP_URL_HOST))];
+        $fallback = trim((string) ($post['source_url'] ?? ''));
+        if ($out === [] && self::isWebUrl($fallback)) {
+            $out[] = ['url' => $fallback, 'name' => (string) (($post['source_name'] ?? '') ?: parse_url($fallback, PHP_URL_HOST))];
         }
         return $out;
+    }
+
+    private static function isWebUrl(string $url): bool
+    {
+        return preg_match('~^https?://[^\s/?#\\\\]+~i', $url) === 1;
     }
 
     /** Most used tags of recent posts (internal links on the listing page). */

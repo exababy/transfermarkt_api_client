@@ -157,11 +157,21 @@ final class ClubRepository
     public function forSitemap(): array
     {
         $lastSync = self::safe(static fn () => Database::fetchValue('SELECT MAX(updated_at) FROM stats_summary'), null);
-        $out = [['url' => url('/takimlar'), 'lastmod' => is_string($lastSync) ? $lastSync : null, 'image' => null, 'name' => 'Oynadığı Takımlar']];
+        $lastSync = is_string($lastSync) && $lastSync !== '' ? $lastSync : null;
+        // lastmod = when a club's numbers last changed (its latest match, at most the last sync),
+        // not the cron time: the sync rewrites updated_at on every run.
+        $latest = [];
+        if ($lastSync !== null) {
+            foreach ((array) self::safe(static fn () => Database::fetchAll('SELECT club_id, MAX(date_utc) AS last_game FROM games WHERE date_utc <= ? GROUP BY club_id', [$lastSync]), []) as $row) {
+                $end = gmdate('Y-m-d H:i:s', (int) strtotime($row['last_game'] . ' UTC') + 7200);
+                $latest[(string) $row['club_id']] = strcmp($end, $lastSync) < 0 ? $end : $lastSync;
+            }
+        }
+        $out = [['url' => url('/takimlar'), 'lastmod' => $latest !== [] ? max($latest) : $lastSync, 'image' => null, 'name' => 'Oynadığı Takımlar']];
         foreach ($this->pages() as $page) {
             $out[] = [
                 'url' => url($page['url']),
-                'lastmod' => is_string($lastSync) ? $lastSync : $page['updated_at'],
+                'lastmod' => $latest[(string) $page['club_id']] ?? $page['updated_at'] ?? $lastSync,
                 'image' => self::logo($page['logo_url'], 'md'),
                 'name' => $page['name'],
             ];

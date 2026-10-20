@@ -12,6 +12,7 @@ use App\Repositories\NewsRepository;
 use App\Repositories\ProductRepository;
 use App\Repositories\StatsRepository;
 use App\Repositories\VideoRepository;
+use App\Services\Shop\Shop;
 use App\Support\Str;
 
 /**
@@ -81,7 +82,7 @@ final class HomeController
         return view('pages/home', [
             'seo' => $seo,
             'activeNav' => 'home',
-            'extraHead' => partial('partials/home-styles', ['page' => 'home']),
+            'extraHead' => self::portraitHint($portrait) . partial('partials/home-styles', ['page' => 'home']),
             'player' => $player,
             'portrait' => $portrait,
             'h1' => $h1,
@@ -100,7 +101,8 @@ final class HomeController
             'clubs' => $clubs,
             'lastSync' => is_string($lastSync) ? $lastSync : null,
             'shopEnabled' => $shopEnabled,
-            'ordersEnabled' => (bool) setting('shop.orders_enabled', false),
+            // Same rule as the shop pages: switched on AND a payment method available.
+            'ordersEnabled' => $shopEnabled && (bool) LifeController::safely(static fn (): bool => Shop::ordersOpen(), false),
             'products' => $products,
         ]);
     }
@@ -226,6 +228,21 @@ final class HomeController
     // ------------------------------------------------------------------ JSON-LD
 
     /** @return array<string, mixed> */
+    /**
+     * The hero portrait is the home page's LCP image and usually comes from another host
+     * (Transfermarkt CDN): open that connection while the HTML is still parsing. No crossorigin
+     * attribute — a plain <img> uses the no-CORS connection pool.
+     */
+    private static function portraitHint(?array $portrait): string
+    {
+        $host = $portrait !== null ? parse_url((string) $portrait['url'], PHP_URL_HOST) : null;
+        $scheme = $portrait !== null ? parse_url((string) $portrait['url'], PHP_URL_SCHEME) : null;
+        if (!is_string($host) || $host === '' || !in_array($scheme, ['http', 'https'], true) || $host === parse_url(url('/'), PHP_URL_HOST)) {
+            return '';
+        }
+        return '<link rel="preconnect" href="' . e($scheme . '://' . $host) . '">' . "\n";
+    }
+
     public static function websiteSchema(): array
     {
         return [

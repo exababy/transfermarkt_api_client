@@ -77,6 +77,21 @@ final class PaymentManager
         return isset($this->gateways[$key]) ? $this->gateways[$key]->label() : $key;
     }
 
+    /** @return list<string> Turkish warnings for active gateways that run in test mode (admin dashboard + payment settings) */
+    public function testModeWarnings(): array
+    {
+        $warnings = [];
+        $paytr = $this->gateways['paytr'];
+        if ($paytr instanceof PaytrGateway && $paytr->isAvailable() && $paytr->testMode()) {
+            $warnings[] = 'PayTR test modunda: ödemeler PayTR test kartlarıyla yapılır ve gerçek tahsilat olmaz, ancak siparişler “Ödendi” görünür. Gerçek satışa geçmeden Ödeme Ayarları’ndan “Test modu”nu kapatın.';
+        }
+        $iyzico = $this->gateways['iyzico'];
+        if ($iyzico instanceof IyzicoGateway && $iyzico->isAvailable() && $iyzico->sandbox()) {
+            $warnings[] = 'iyzico sandbox (test ortamı) modunda: ödemeler gerçek değildir. Canlı anahtarlara geçerken “Sandbox” seçeneğini kapatın.';
+        }
+        return $warnings;
+    }
+
     /**
      * Apply a verified gateway callback to its order (idempotent).
      *
@@ -107,12 +122,31 @@ final class PaymentManager
         if ($order['payment_status'] === 'odendi') {
             return ['outcome' => 'duplicate', 'order' => $order];
         }
-        if (!empty($result['pending'])) {
-            Log::info('payment', 'Payment pending review', $context);
-            return ['outcome' => 'pending', 'order' => $order];
+        if ($order['payment_status'] === 'iade') {
+            // Refunded: a replayed or late "success" must not mark it paid again (markPaid() refuses it as well).
+            Log::warning('payment', 'Payment callback for a refunded order ignored', $context + ['paid' => !empty($result['paid'])]);
+            return ['outcome' => 'duplicate', 'order' => $order];
+        }
+        $attempt = isset($result['attempt']) ? (string) $result['attempt'] : '';
+        if ($attempt !== '' && ($order['payload']['attempt'] ?? null) === $attempt) {
+            // e.g. a Shopier return re-POSTed with an edited (unsigned) status: each signed return counts once.
+            Log::warning('payment', 'Repeated payment callback ignored', $context + ['attempt' => $attempt]);
+            return ['outcome' => 'duplicate', 'order' => $order];
         }
         $payload = json_encode(($result['payload'] ?? []) + ['received_at' => gmdate('c')], JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES) ?: null;
         $ref = isset($result['ref']) ? (string) $result['ref'] : null;
+        if (!empty($result['pending'])) {
+            Log::info('payment', 'Payment pending review', $context);
+            if (!empty($result['review']) && $orders->markReview((int) $order['id'], $ref, $payload)) {
+                // The gateway's word is not proof of payment (Shopier return): the owner confirms it manually.
+                $fresh = $orders->find((int) $order['id']);
+                if ($fresh !== null) {
+                    OrderNotifier::review($fresh);
+                }
+                return ['outcome' => 'pending', 'order' => $fresh];
+            }
+            return ['outcome' => 'pending', 'order' => $order];
+        }
 
         if (!empty($result['paid'])) {
             $expected = (int) $order['total_kurus'];

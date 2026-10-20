@@ -9,6 +9,17 @@ namespace App\Core;
  */
 final class Request
 {
+    /**
+     * Default app.trusted_proxies: Cloudflare's edge ranges (https://www.cloudflare.com/ips-v4 and /ips-v6,
+     * checked 2026-10). Proxy headers are honoured only when REMOTE_ADDR is in the trusted list.
+     */
+    public const CLOUDFLARE_RANGES = [
+        '173.245.48.0/20', '103.21.244.0/22', '103.22.200.0/22', '103.31.4.0/22', '141.101.64.0/18', '108.162.192.0/18',
+        '190.93.240.0/20', '188.114.96.0/20', '197.234.240.0/22', '198.41.128.0/17', '162.158.0.0/15', '104.16.0.0/13',
+        '104.24.0.0/14', '172.64.0.0/13', '131.0.72.0/22',
+        '2400:cb00::/32', '2606:4700::/32', '2803:f800::/32', '2405:b500::/32', '2405:8100::/32', '2a06:98c0::/29', '2c0f:f248::/32',
+    ];
+
     /** @var array<string, mixed> */
     private array $params = [];
     private ?string $rawPath = null;
@@ -114,24 +125,32 @@ final class Request
         return (string) file_get_contents('php://input');
     }
 
-    /** Client IP (REMOTE_ADDR; proxy headers only when app.trust_proxy is true). */
+    /**
+     * Client IP: REMOTE_ADDR, unless app.trust_proxy is true AND REMOTE_ADDR is a trusted proxy
+     * (app.trusted_proxies, default Cloudflare). Then X-Forwarded-For is read from the right and the first hop
+     * that is not a trusted proxy wins (left-most entries are client-supplied); CF-Connecting-IP is the fallback.
+     */
     public function ip(): string
     {
-        $candidates = [];
-        if (Config::get('app.trust_proxy', false)) {
-            $candidates[] = $this->header('CF-Connecting-IP');
-            $forwarded = $this->header('X-Forwarded-For');
-            if ($forwarded !== null) {
-                $candidates[] = trim(explode(',', $forwarded)[0]);
+        $remote = (string) ($this->server['REMOTE_ADDR'] ?? '');
+        $remote = filter_var($remote, FILTER_VALIDATE_IP) !== false ? $remote : '0.0.0.0';
+        if (!$this->fromTrustedProxy()) {
+            return $remote;
+        }
+        $forwarded = $this->header('X-Forwarded-For');
+        if ($forwarded !== null) {
+            foreach (array_reverse(explode(',', $forwarded)) as $hop) {
+                $hop = trim($hop);
+                if (filter_var($hop, FILTER_VALIDATE_IP) === false) {
+                    break; // malformed chain: trust nothing further left
+                }
+                if (!self::isTrustedProxy($hop)) {
+                    return $hop;
+                }
             }
         }
-        $candidates[] = $this->server['REMOTE_ADDR'] ?? null;
-        foreach ($candidates as $ip) {
-            if (is_string($ip) && filter_var($ip, FILTER_VALIDATE_IP) !== false) {
-                return $ip;
-            }
-        }
-        return '0.0.0.0';
+        $connecting = trim((string) $this->header('CF-Connecting-IP'));
+        return filter_var($connecting, FILTER_VALIDATE_IP) !== false ? $connecting : $remote;
     }
 
     public function isHttps(): bool
@@ -143,7 +162,59 @@ final class Request
         if ((string) ($this->server['SERVER_PORT'] ?? '') === '443') {
             return true;
         }
-        return Config::get('app.trust_proxy', false) && strtolower((string) $this->header('X-Forwarded-Proto')) === 'https';
+        return $this->fromTrustedProxy() && strtolower((string) $this->header('X-Forwarded-Proto')) === 'https';
+    }
+
+    /** app.trust_proxy is on and the direct peer (REMOTE_ADDR) is one of the trusted proxies. */
+    private function fromTrustedProxy(): bool
+    {
+        $remote = (string) ($this->server['REMOTE_ADDR'] ?? '');
+        return Config::get('app.trust_proxy', false) && filter_var($remote, FILTER_VALIDATE_IP) !== false && self::isTrustedProxy($remote);
+    }
+
+    /** Is $ip inside app.trusted_proxies (IPs or CIDRs; empty/missing => Cloudflare's ranges)? */
+    public static function isTrustedProxy(string $ip): bool
+    {
+        $ranges = Config::get('app.trusted_proxies', []);
+        $ranges = is_array($ranges) && $ranges !== [] ? $ranges : self::CLOUDFLARE_RANGES;
+        foreach ($ranges as $range) {
+            if (is_string($range) && self::ipInRange($ip, trim($range))) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /** '203.0.113.7' in '203.0.113.0/24' (IPv4 or IPv6; a bare IP matches only itself). */
+    public static function ipInRange(string $ip, string $range): bool
+    {
+        [$subnet, $bits] = str_contains($range, '/') ? explode('/', $range, 2) : [$range, null];
+        if (filter_var($ip, FILTER_VALIDATE_IP) === false || filter_var($subnet, FILTER_VALIDATE_IP) === false) {
+            return false;
+        }
+        $ipBin = (string) inet_pton($ip);
+        $subnetBin = (string) inet_pton($subnet);
+        if (strlen($ipBin) !== strlen($subnetBin)) {
+            return false; // IPv4 vs IPv6
+        }
+        $max = strlen($ipBin) * 8;
+        if ($bits !== null && !ctype_digit($bits)) {
+            return false;
+        }
+        $bits = $bits === null ? $max : (int) $bits;
+        if ($bits > $max) {
+            return false;
+        }
+        $bytes = intdiv($bits, 8);
+        if (strncmp($ipBin, $subnetBin, $bytes) !== 0) {
+            return false;
+        }
+        $rest = $bits % 8;
+        if ($rest === 0) {
+            return true;
+        }
+        $mask = (0xFF << (8 - $rest)) & 0xFF;
+        return (ord($ipBin[$bytes]) & $mask) === (ord($subnetBin[$bytes]) & $mask);
     }
 
     /** Request header by name (case-insensitive), or null. */

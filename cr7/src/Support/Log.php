@@ -143,6 +143,6 @@ final class Log
 
     private static function dir(): string
     {
-        return App::basePath('storage/logs');
+        return App::storagePath('logs');
     }
 }

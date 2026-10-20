@@ -11,6 +11,7 @@ use App\Core\View;
 use App\Repositories\VideoRepository;
 use App\Services\Video\VideoText;
 use App\Support\Format;
+use App\Support\OgImage;
 use App\Support\Str;
 
 /**
@@ -93,6 +94,9 @@ final class VideosController
         if ($category !== null && !isset($categories[$category])) {
             return Response::notFound();
         }
+        if ($request->query('sayfa') === '1') { // one URL for page 1
+            return Response::redirect(url($category === null ? '/videolar' : '/videolar?kategori=' . rawurlencode($category)), 301);
+        }
         $page = self::page($request);
         if ($page === null) {
             return Response::notFound();
@@ -121,15 +125,18 @@ final class VideosController
             $breadcrumbs[] = ['name' => "Sayfa {$page}"];
         }
 
+        // Gallery share card (1200x630) instead of a 480x360 thumbnail of whichever video is newest.
+        $card = $videos !== [] ? OgImage::page('videolar' . ($category !== null ? '-' . $category : ''), $h1, 'Goller, özetler, röportajlar', 'VİDEOLAR') : null;
         $seo = new Seo(
             title: $title,
             description: $description,
             canonical: $canonical,
-            image: $videos !== [] ? VideoText::thumbnail($videos[0]['youtube_id']) : null,
-            robots: $total > 0 ? 'index,follow,max-image-preview:large' : 'noindex,follow',
+            image: $card ?? ($videos !== [] ? VideoText::thumbnail($videos[0]['youtube_id']) : null),
+            // The gallery hub is indexable once it has a video; a category page needs Seo::LISTING_INDEX_MIN.
+            robots: $total >= ($category === null ? 1 : Seo::LISTING_INDEX_MIN) ? 'index,follow,max-image-preview:large' : 'noindex,follow',
             jsonLd: $videos !== [] ? [self::itemList($videos, $canonical, $h1, ($page - 1) * self::PER_PAGE)] : [],
             breadcrumbs: $breadcrumbs,
-            extraMeta: $videos !== [] ? [['property' => 'og:image:width', 'content' => '480'], ['property' => 'og:image:height', 'content' => '360']] : [],
+            extraMeta: $card !== null ? OgImage::meta($card) : ($videos !== [] ? [['property' => 'og:image:width', 'content' => '480'], ['property' => 'og:image:height', 'content' => '360']] : []),
             prev: $page > 1 ? page_url($base, $page - 1) : null,
             next: $page < $pages ? page_url($base, $page + 1) : null,
         );
@@ -188,7 +195,7 @@ final class VideosController
             'url' => $canonical,
             'isFamilyFriendly' => true,
             'genre' => $video['category_name'],
-            'about' => ['@type' => 'Person', 'name' => 'Cristiano Ronaldo', 'sameAs' => 'https://tr.wikipedia.org/wiki/Cristiano_Ronaldo'],
+            'about' => LifeController::personRef(),
             'publisher' => $channel !== ''
                 ? ['@type' => 'Organization', 'name' => $channel] + (!empty($video['channel_id']) ? ['url' => 'https://www.youtube.com/channel/' . $video['channel_id']] : [])
                 : ['@type' => 'Organization', 'name' => Seo::siteName(), 'url' => url('/')],
@@ -205,9 +212,10 @@ final class VideosController
             ];
         }
 
+        [$thumbWidth, $thumbHeight] = VideoText::thumbnailSize((string) $video['thumbnail_url']);
         $extraMeta = [
-            ['property' => 'og:image:width', 'content' => '480'],
-            ['property' => 'og:image:height', 'content' => '360'],
+            ['property' => 'og:image:width', 'content' => (string) $thumbWidth],
+            ['property' => 'og:image:height', 'content' => (string) $thumbHeight],
             ['property' => 'og:video', 'content' => VideoText::embedUrl($id)],
             ['property' => 'og:video:secure_url', 'content' => VideoText::embedUrl($id)],
             ['property' => 'og:video:type', 'content' => 'text/html'],
@@ -224,6 +232,7 @@ final class VideosController
             title: Str::limit($video['title'], 60),
             description: $metaDescription,
             canonical: $canonical,
+            robots: !empty($video['is_indexable']) ? 'index,follow,max-image-preview:large,max-video-preview:-1' : 'noindex,follow',
             image: (string) $video['thumbnail_url'],
             type: 'video.other',
             jsonLd: [$schema],
@@ -248,8 +257,9 @@ final class VideosController
             'descriptionHtml' => VideoText::descriptionHtml($descriptionShort),
             'descriptionMoreHtml' => VideoText::descriptionHtml($descriptionMore),
             'activeNav' => 'videolar',
-            // The facade image is the largest element above the fold: preload it (the partial lazy-loads it).
-            'extraHead' => self::styles() . '<link rel="preload" as="image" href="' . e((string) $video['thumbnail_url']) . '" fetchpriority="high">',
+            // The template renders the youtube-nocookie iframe server-side ('facade' => false) so
+            // crawlers find the player without a click (VideoObject + video sitemap point here).
+            'extraHead' => self::styles(),
         ]));
     }
 

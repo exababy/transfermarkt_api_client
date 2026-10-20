@@ -20,6 +20,8 @@
  * @var list<array<string, mixed>> $latest
  * @var array|null $player
  * @var string|null $lastSync
+ * @var array<int, array> $matchSeasons seasonOptions(): seasons the match list can filter by
+ * @var array<string, array> $matchCompetitions competitionOptions(): competitions the match list can filter by
  */
 
 use App\Support\Format;
@@ -72,6 +74,8 @@ foreach ($nationalCareer as $row) {
 }
 $injuryDays = array_sum(array_map(static fn (array $i): int => (int) $i['days'], $injuries));
 $injuryGames = array_sum(array_map(static fn (array $i): int => (int) $i['missed_games'], $injuries));
+// Before the first sync every total is 0: show one empty state instead of zero tiles and tables.
+$hasStats = (int) $career['appearances'] > 0 || $clubStats !== [] || $latest !== [];
 ?>
 <header class="page-header">
   <div class="container">
@@ -82,6 +86,14 @@ $injuryGames = array_sum(array_map(static fn (array $i): int => (int) $i['missed
   </div>
 </header>
 
+<?php if (!$hasStats): ?>
+<section class="section-sm" aria-labelledby="genel-baslik">
+  <div class="container">
+    <h2 class="visually-hidden" id="genel-baslik">Genel kariyer istatistikleri</h2>
+    <?= partial('partials/stats-empty', ['text' => 'Kulüp, turnuva ve sezon bazında maç, gol, asist ve dakika istatistikleri Transfermarkt ile ilk senkronizasyondan sonra burada görünecek.']) ?>
+  </div>
+</section>
+<?php else: ?>
 <section class="section-sm" aria-labelledby="genel-baslik">
   <div class="container stack">
     <h2 class="visually-hidden" id="genel-baslik">Genel kariyer istatistikleri</h2>
@@ -96,7 +108,7 @@ $injuryGames = array_sum(array_map(static fn (array $i): int => (int) $i['missed
       <?= partial('partials/stat-tile', ['value' => $national['games'], 'label' => 'Milli maç', 'sub' => 'Portekiz A Milli Takımı']) ?>
       <?= partial('partials/stat-tile', ['value' => $national['goals'], 'label' => 'Milli gol', 'sub' => $national['games'] > 0 ? 'Maç başına ' . $ratio($national['goals'], $national['games']) : null]) ?>
       <?= partial('partials/stat-tile', ['value' => $gameTotals['hat_tricks'], 'label' => 'Hat-trick', 'sub' => 'Maçta 3+ gol']) ?>
-      <?= partial('partials/stat-tile', ['value' => $career['penalty_goals'], 'label' => 'Penaltı golü', 'sub' => $career['penalty_attempts'] > 0 ? Format::number($career['penalty_attempts']) . ' atıştan (%' . Format::number($career['penalty_goals'] / $career['penalty_attempts'] * 100) . ')' : null]) ?>
+      <?= partial('partials/stat-tile', ['value' => $career['penalty_goals'], 'label' => 'Penaltı golü', 'sub' => $career['penalty_attempts'] > 0 ? Format::number($career['penalty_attempts']) . ' atıştan (' . Format::percent($career['penalty_goals'] / $career['penalty_attempts'] * 100) . ')' : null]) ?>
     </div>
     <p class="meta"><span>Toplamlar Transfermarkt’ın kariyer verisidir ve genç milli takımları da içerir.</span><a href="<?= e(url('/istatistikler/maclar')) ?>">Maç maç kayıtlar</a></p>
   </div>
@@ -146,7 +158,7 @@ $injuryGames = array_sum(array_map(static fn (array $i): int => (int) $i['missed
           <tbody>
             <?php foreach ($competitionStats as $row): ?>
             <tr>
-              <th scope="row"><span class="cell-club"><?php if ($row['logo_url']): ?><img class="logo-xs" src="<?= e($row['logo_url']) ?>" alt="" width="18" height="18" loading="lazy" decoding="async"><?php endif; ?><a href="<?= e(url('/istatistikler/maclar?turnuva=' . rawurlencode($row['competition_id']))) ?>"><?= e($row['name']) ?></a></span></th>
+              <th scope="row"><span class="cell-club"><?php if ($row['logo_url']): ?><img class="logo-xs" src="<?= e($row['logo_url']) ?>" alt="" width="18" height="18" loading="lazy" decoding="async"><?php endif; ?><?php if (isset($matchCompetitions[(string) $row['competition_id']])): ?><a href="<?= e(url('/istatistikler/maclar?turnuva=' . rawurlencode((string) $row['competition_id']))) ?>"><?= e($row['name']) ?></a><?php else: ?><?= e($row['name']) ?><?php endif; ?></span></th>
               <td class="num"><?= e(Format::number($row['appearances'])) ?></td>
               <td class="num"><strong><?= e(Format::number($row['goals'])) ?></strong></td>
               <td class="num"><?= e(Format::number($row['assists'])) ?></td>
@@ -176,7 +188,7 @@ $injuryGames = array_sum(array_map(static fn (array $i): int => (int) $i['missed
           <tbody>
             <?php foreach ($seasonStats as $row): ?>
             <tr>
-              <th scope="row"><a href="<?= e(url('/istatistikler/maclar?sezon=' . $row['season_id'])) ?>"><?= e($row['season_label']) ?></a></th>
+              <th scope="row"><?php if (isset($matchSeasons[(int) $row['season_id']])): ?><a href="<?= e(url('/istatistikler/maclar?sezon=' . $row['season_id'])) ?>"><?= e($row['season_label']) ?></a><?php else: ?><?= e($row['season_label']) ?><?php endif; ?></th>
               <td><span class="cell-club"><?php if ($row['logo_url']): ?><img class="logo-xs" src="<?= e($row['logo_url']) ?>" alt="" width="18" height="18" loading="lazy" decoding="async"><?php endif; ?><?= e($row['name']) ?></span></td>
               <td class="num"><?= e(Format::number($row['appearances'])) ?></td>
               <td class="num"><strong><?= e(Format::number($row['goals'])) ?></strong></td>
@@ -232,7 +244,7 @@ $injuryGames = array_sum(array_map(static fn (array $i): int => (int) $i['missed
       <?= partial('partials/stat-tile', ['value' => $national['debut_date'] ? Format::date($national['debut_date'], 'Y') : '–', 'label' => 'İlk maç', 'sub' => $national['debut_date'] ? Format::date($national['debut_date']) : null]) ?>
       <?= partial('partials/stat-tile', ['value' => $national['last_game_date'] ? Format::date($national['last_game_date'], 'Y') : '–', 'label' => 'Son maç', 'sub' => $national['last_game_date'] ? Format::date($national['last_game_date']) : null]) ?>
     </div>
-    <div class="grid grid-2">
+    <div class="grid grid-2-lg">
       <div>
         <h3>Tüm Portekiz takımları</h3>
         <div class="table-wrap">
@@ -341,4 +353,5 @@ $injuryGames = array_sum(array_map(static fn (array $i): int => (int) $i['missed
     <?php endif; ?>
   </div>
 </section>
+<?php endif; ?>
 <?= partial('partials/stats-chart-script', ['cspNonce' => $cspNonce ?? '']) ?>

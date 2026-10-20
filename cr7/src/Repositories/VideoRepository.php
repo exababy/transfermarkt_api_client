@@ -14,7 +14,8 @@ use App\Support\Date;
  * Row shape of latest()/featured()/search()/related()/findBySlug():
  * ['id','youtube_id','slug','title','description','thumbnail_url','published_at','category',
  *  'channel_title','duration_seconds','url' ('/video/slug')] plus 'channel_id','view_count',
- * 'is_featured','status','source','created_at','updated_at','category_name','date' (published_at ?? created_at).
+ * 'is_featured','status','source','created_at','updated_at','category_name','date' (published_at ?? created_at),
+ * 'is_indexable' (Turkish title; otherwise the watch page is noindex and left out of the sitemap).
  */
 final class VideoRepository
 {
@@ -133,9 +134,9 @@ final class VideoRepository
         $where = ['status = ?'];
         $params = [self::STATUS_PUBLISHED];
         foreach ($words as $word) {
-            $like = '%' . Database::likeEscape($word) . '%';
-            $where[] = "(title LIKE ? ESCAPE '\\' OR description LIKE ? ESCAPE '\\' OR channel_title LIKE ? ESCAPE '\\')";
-            array_push($params, $like, $like, $like);
+            [$sql, $wordParams] = Database::containsAny(['title', 'description', 'channel_title'], $word);
+            $where[] = $sql;
+            array_push($params, ...$wordParams);
         }
         $params[] = max(1, $limit);
         return self::map(Database::fetchAll(
@@ -173,6 +174,9 @@ final class VideoRepository
         $out = [];
         foreach ($rows as $row) {
             $video = self::row($row);
+            if (!$video['is_indexable']) {
+                continue;
+            }
             $out[] = [
                 'url' => url($video['url']),
                 'lastmod' => (string) ($video['updated_at'] ?: $video['date']),
@@ -323,9 +327,10 @@ final class VideoRepository
         $params = [];
         $q = trim((string) $q);
         if ($q !== '') {
-            $like = '%' . Database::likeEscape($q) . '%';
-            $where[] = "(title LIKE ? ESCAPE '\\' OR channel_title LIKE ? ESCAPE '\\' OR youtube_id = ?)";
-            array_push($params, $like, $like, $q);
+            [$sql, $likeParams] = Database::containsAny(['title', 'channel_title'], $q);
+            $where[] = '(' . $sql . ' OR youtube_id = ?)';
+            array_push($params, ...$likeParams);
+            $params[] = $q;
         }
         if ($category !== null && $category !== '') {
             $where[] = 'category = ?';
@@ -356,6 +361,10 @@ final class VideoRepository
         $row['url'] = '/video/' . $row['slug'];
         $row['category_name'] = self::categoryName($row['category']);
         $row['date'] = (string) (($row['published_at'] ?? '') !== '' ? $row['published_at'] : $row['created_at']);
+        // Auto-imported channel videos keep their English/Portuguese/Arabic titles: thin foreign-language
+        // pages on a Turkish site are noindex (and out of the video sitemap) until an admin gives
+        // them a Turkish title.
+        $row['is_indexable'] = VideoText::looksTurkish($row['title']);
         return $row;
     }
 }

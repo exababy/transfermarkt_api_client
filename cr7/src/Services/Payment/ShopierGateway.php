@@ -22,6 +22,12 @@ use App\Services\Shop\Shop;
  *   request  signature = base64(HMAC-SHA256(random_nr . platform_order_id . total_order_value . currency, api_secret))
  *   callback signature = base64(HMAC-SHA256(random_nr . platform_order_id, api_secret)); status = success|failed
  * The amount is part of the signed request, so it cannot be altered by the buyer; the callback has no amount.
+ *
+ * The callback travels through the buyer's browser and its signature does NOT cover `status` (nor payment_id):
+ * the same signed fields arrive for a declined card, so a buyer could flip "failed" to "success". A Shopier
+ * return therefore never marks an order paid: "success" is recorded for review (order stays 'bekliyor', the owner
+ * is notified and confirms it in the panel after checking the Shopier merchant panel), "failed" marks the attempt
+ * failed, and each signed return (random_nr) is applied once (PaymentManager::applyCallback()).
  */
 final class ShopierGateway extends AbstractGateway
 {
@@ -145,14 +151,25 @@ final class ShopierGateway extends AbstractGateway
             }
         }
         $paymentId = is_scalar($post['payment_id'] ?? null) ? (string) $post['payment_id'] : '';
+        $success = $status === 'success';
+        // One signed return per payment attempt: random_nr is issued per form, so a re-POST is a replay.
+        $attempt = 'shopier:' . mb_substr($randomNr, 0, 40);
+        $payload['attempt'] = $attempt;
+        if ($success) {
+            $payload['review'] = true;
+        }
         return [
             'valid' => true,
             'order_no' => $orderId,
-            'paid' => $status === 'success',
+            // `status` is not signed (see class doc): a "success" return is only a claim for the owner to verify.
+            'paid' => false,
+            'pending' => $success,
+            'review' => $success,
+            'attempt' => $attempt,
             'amount_kurus' => null, // not part of the callback; the request amount was signed
             'ref' => 'shopier:' . ($paymentId !== '' ? $paymentId : $randomNr),
             'payload' => $payload,
-            'message' => 'Shopier callback status ' . $status,
+            'message' => 'Shopier callback status ' . $status . ($success ? ' (unsigned status, manual confirmation required)' : ''),
         ];
     }
 }

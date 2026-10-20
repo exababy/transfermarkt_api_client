@@ -73,12 +73,24 @@
     }
     toggle.addEventListener('click', function (e) {
       e.stopPropagation();
-      setOpen(!sidebar.classList.contains('is-open'));
+      var open = !sidebar.classList.contains('is-open');
+      setOpen(open);
+      // The sidebar precedes the toggle in the DOM: move keyboard focus into it when it opens.
+      var first = open && sidebar.querySelector('a[href], button:not([disabled])');
+      if (first) first.focus();
     });
     doc.addEventListener('click', function (e) {
       if (sidebar.classList.contains('is-open') && !sidebar.contains(e.target)) setOpen(false);
     });
-    doc.addEventListener('keydown', function (e) { if (e.key === 'Escape') setOpen(false); });
+    doc.addEventListener('keydown', function (e) {
+      if (e.key !== 'Escape' || !sidebar.classList.contains('is-open')) return;
+      var inside = sidebar.contains(doc.activeElement);
+      setOpen(false);
+      if (inside) toggle.focus();
+    });
+    doc.addEventListener('focusin', function (e) {
+      if (sidebar.classList.contains('is-open') && !sidebar.contains(e.target) && e.target !== toggle) setOpen(false);
+    });
   }
 
   /* Show/hide secret inputs: <button data-toggle-password="#paytr_key"> */

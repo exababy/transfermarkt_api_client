@@ -25,6 +25,7 @@ $sourceLabels = ['manual' => 'Elle eklendi', 'rss' => 'YouTube RSS', 'api' => 'Y
       <label for="title">Başlık <span class="req" aria-hidden="true">*</span></label>
       <input class="input input-lg" id="title" name="title" type="text" value="<?= e($video['title']) ?>" maxlength="255" required data-counter="255"<?= $aria('title') ?>>
       <?= $err('title') ?>
+      <p class="form-help">Türkçe olmayan başlıklı videolar (kanallardan otomatik gelenler) <code>noindex</code> olur ve video site haritasına girmez; Türkçe bir başlık yazınca indekslenir.</p>
     </div>
     <div class="form-row">
       <div class="field">

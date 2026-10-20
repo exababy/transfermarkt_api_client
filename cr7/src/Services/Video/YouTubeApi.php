@@ -129,7 +129,13 @@ final class YouTubeApi
             return null;
         }
         $thumbs = (array) ($snippet['thumbnails'] ?? []);
-        $thumb = VideoText::thumbnail($id, isset($thumbs['high']) ? 'hqdefault' : 'mqdefault');
+        // Largest size the API reports (maxres 1280x720 qualifies for large previews/Discover).
+        $thumb = VideoText::thumbnail($id, match (true) {
+            isset($thumbs['maxres']) => 'maxresdefault',
+            isset($thumbs['standard']) => 'sddefault',
+            isset($thumbs['high']) => 'hqdefault',
+            default => 'mqdefault',
+        });
         try {
             $published = isset($snippet['publishedAt']) ? Date::toUtc((string) $snippet['publishedAt']) : null;
         } catch (\InvalidArgumentException) {

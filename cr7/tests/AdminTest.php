@@ -19,6 +19,7 @@ use App\Core\Router;
 use App\Core\Session;
 use App\Core\Settings;
 use App\Services\News\SourceRegistry;
+use App\Support\Cache;
 use App\Support\Date;
 use App\Support\OgImage;
 
@@ -196,6 +197,49 @@ final class AdminTest extends TestCase
         $this->assertNull(Database::fetchOne('SELECT id FROM posts WHERE id = ?', [$post['id']]));
     }
 
+    public function testRenamedSlugsAnswer301(): void
+    {
+        $this->login();
+        $form = ['title' => 'Ronaldo Al Nassr hisse iddiası', 'summary' => 'Özet.', 'body' => '<p>Metin</p>', 'status' => 'published', 'is_indexable' => '1', 'published_at' => '2026-10-20T10:00'];
+        $this->request('POST', '/admin/haberler/yeni', $form + ['slug' => 'ilk-adres']);
+        $id = (int) Database::fetchValue('SELECT id FROM posts WHERE slug = ?', ['ilk-adres']);
+        $this->removeImage(Database::fetchValue('SELECT image_path FROM posts WHERE id = ?', [$id]));
+        $this->assertSame(200, $this->request('GET', '/haber/ilk-adres')->status());
+
+        $this->request('POST', '/admin/haberler/' . $id . '/duzenle', $form + ['slug' => 'ikinci-adres']);
+        $this->request('POST', '/admin/haberler/' . $id . '/duzenle', $form + ['slug' => 'son-adres']);
+        foreach (['ilk-adres', 'ikinci-adres'] as $old) {
+            $moved = $this->request('GET', '/haber/' . $old);
+            $this->assertSame(301, $moved->status(), 'old slug ' . $old);
+            $this->assertSame(url('/haber/son-adres'), $moved->header('Location'));
+        }
+        $this->assertSame(200, $this->request('GET', '/haber/son-adres')->status());
+        $this->assertSame(404, $this->request('GET', '/haber/hic-olmadi')->status());
+
+        // Back to the first slug: it is live again, the newest one redirects.
+        $this->request('POST', '/admin/haberler/' . $id . '/duzenle', $form + ['slug' => 'ilk-adres']);
+        $this->assertSame(200, $this->request('GET', '/haber/ilk-adres')->status());
+        $this->assertSame(url('/haber/ilk-adres'), $this->request('GET', '/haber/son-adres')->header('Location'));
+        $this->removeImage(Database::fetchValue('SELECT image_path FROM posts WHERE id = ?', [$id]));
+
+        // A draft has no public URL to send visitors to; a deleted post leaves no redirects behind.
+        $this->request('POST', '/admin/haberler/' . $id . '/duzenle', ['status' => 'draft', 'slug' => 'ilk-adres'] + $form);
+        $this->assertSame(404, $this->request('GET', '/haber/son-adres')->status());
+        $this->request('POST', '/admin/haberler/' . $id . '/sil');
+        $this->assertSame(0, (int) Database::fetchValue('SELECT COUNT(*) FROM slug_redirects'));
+
+        // Products: ProductRepository::update records the old slug too.
+        $products = new \App\Repositories\ProductRepository();
+        $productId = $products->create(['slug' => 'eski-forma', 'title' => 'Real Madrid 2013–14 Forması', 'club_name' => 'Real Madrid', 'price' => '1299.90', 'is_active' => 1]);
+        $products->update($productId, ['slug' => 'yeni-forma']);
+        \App\Core\Settings::set('shop.enabled', true);
+        $moved = $this->request('GET', '/forma/eski-forma');
+        $this->assertSame(301, $moved->status());
+        $this->assertSame(url('/forma/yeni-forma'), $moved->header('Location'));
+        $products->update($productId, ['is_active' => 0]);
+        $this->assertSame(404, $this->request('GET', '/forma/eski-forma')->status(), 'inactive product: no redirect target');
+    }
+
     public function testQueueListSkipAndPublishGuards(): void
     {
         $this->login();
@@ -205,7 +249,7 @@ final class AdminTest extends TestCase
         $published = $this->insertItem(['title' => 'Yayınlanmış haber', 'status' => 'published']);
 
         $html = $this->request('GET', '/admin/haber-kuyrugu')->body();
-        foreach (['Ronaldo 950. golünü attı', 'Ana kayıt · +2', '#' . $primary . ' kümesi', 'Not: low-uniqueness (31.5%)', 'Şimdi yayınla', 'Atla'] as $needle) {
+        foreach (['Ronaldo 950. golünü attı', 'Ana kayıt · +2', '#' . $primary . ' kümesi', 'Not: özgünlük eşiğin altında (%31,5) [low-uniqueness]', 'Şimdi yayınla', 'Atla'] as $needle) {
             $this->assertContains($needle, $html, 'queue');
         }
         $cluster = $this->request('GET', '/admin/haber-kuyrugu?kume=' . $primary)->body();
@@ -228,6 +272,10 @@ final class AdminTest extends TestCase
         $this->assertNull(QueueController::clusterOf('no-text'));
         $this->assertSame('low-uniqueness (31.5%)', QueueController::noteText('cluster:12; low-uniqueness (31.5%)'));
         $this->assertSame('', QueueController::noteText('cluster:12'));
+        $this->assertSame('özgünlük eşiğin altında (%31,5) [low-uniqueness]', QueueController::noteLabel('cluster:12; low-uniqueness (31.5%)'), 'Turkish percent style');
+        $this->assertSame('Bu kayıt yalnızca doğrulama kaynağı olarak kullanılır (Google Haberler); haber metni aynı hikâyenin diğer kaynaklarından derlenir', QueueController::noteLabel('evidence-only'), 'plain Turkish, no internal code');
+        $this->assertSame('hikâye zaten #4 numaralı haberle yayınlandı', QueueController::noteLabel('post:4'));
+        $this->assertSame('', QueueController::noteLabel('cluster:12'));
     }
 
     public function testSettingsValidateSaveAndKeepSecrets(): void
@@ -240,9 +288,10 @@ final class AdminTest extends TestCase
 
         $invalid = $this->request('POST', '/admin/ayarlar', $this->settingsForm([
             'news_daily_limit' => '51', 'spinner_min_change_ratio' => '0,95', 'analytics_ga4_id' => 'UA-123', 'indexnow_key' => 'kısa', 'site_portrait_url' => 'javascript:alert(1)', 'youtube_api_key' => 'x',
+            'news_max_age_hours' => '2', 'news_window_from' => '25', 'seo_google_verification' => '<script>',
         ]));
         $this->assertSame(422, $invalid->status());
-        foreach (['1 ile 50 arasında', '0,2 ile 0,9 arasında', '“G-” ile başlamalı', 'IndexNow anahtarı 8–128', 'site içi bir yol', 'API anahtarı geçersiz'] as $message) {
+        foreach (['1 ile 50 arasında', '0,2 ile 0,9 arasında', '“G-” ile başlamalı', 'IndexNow anahtarı 8–128', 'site içi bir yol', 'API anahtarı geçersiz', 'En fazla haber yaşı 6 ile 168', 'başlangıcı 0 ile 23', 'Google Search Console doğrulama kodu geçersiz'] as $message) {
             $this->assertContains($message, $invalid->body());
         }
         $this->assertSame([], Settings::all(), 'nothing stored on error');
@@ -262,6 +311,22 @@ final class AdminTest extends TestCase
         $this->assertSame('G-AB12CD34EF', Settings::get('analytics.ga4_id'));
         $this->assertSame('AIzaSyA1234567890abcdefghijklmnop', Settings::get('youtube.api_key'));
         $this->assertFalse(array_key_exists('site.hero_subtitle', Settings::all()), 'empty optional text is not stored');
+        $this->assertFalse(array_key_exists('news.publish_window', Settings::all()), 'default window is not stored as an override');
+
+        $this->request('POST', '/admin/ayarlar', $this->settingsForm(['news_window_from' => '0', 'news_window_to' => '0', 'news_max_age_hours' => '24']));
+        Settings::flush();
+        $this->assertSame([0, 0], Settings::get('news.publish_window'), 'window saved as [from, to]');
+        $this->assertSame(24, Settings::get('news.max_age_hours'));
+        $this->assertContains('şu an: Gün boyu', $this->request('GET', '/admin/ayarlar')->body());
+        $this->assertTrue((new \App\Services\News\NewsPublisher())->gate()['ok'], 'all-day window opens the publish gate');
+
+        $this->request('POST', '/admin/ayarlar', $this->settingsForm([
+            'seo_google_verification' => '<meta name="google-site-verification" content="AbC-123_xyz.TOKEN" />', 'seo_yandex_verification' => '0123456789abcdef',
+        ]));
+        Settings::flush();
+        $this->assertSame('AbC-123_xyz.TOKEN', Settings::get('seo.google_verification'), 'code extracted from a pasted meta tag');
+        $this->assertSame('0123456789abcdef', Settings::get('seo.yandex_verification'));
+        $this->assertFalse(array_key_exists('seo.bing_verification', Settings::all()), 'empty code is not stored');
 
         $html = $this->request('GET', '/admin/ayarlar')->body();
         $this->assertNotContains('AIzaSyA1234567890abcdefghijklmnop', $html, 'secret never printed');
@@ -284,6 +349,11 @@ final class AdminTest extends TestCase
         $this->assertTrue(preg_match('/^[0-9a-f]{40}$/', $token) === 1, 'cron token');
         $this->assertContains('/cron/' . $token, $this->request('GET', '/admin/ayarlar')->body(), 'shown once after generating');
         $this->assertNotContains('/cron/' . $token, $this->request('GET', '/admin/ayarlar')->body(), 'masked afterwards');
+        // The web cron accepts the token generated in the panel (setting), not only config.php.
+        $cron = $this->request('GET', '/cron/' . $token . '?task=yok-boyle-gorev');
+        $this->assertSame(200, $cron->status(), 'panel-generated web cron token works');
+        $this->assertContains('Bilinmeyen görev', $cron->body());
+        $this->assertSame(404, $this->request('GET', '/cron/' . str_repeat('a', 40))->status(), 'wrong token => 404');
 
         if (class_exists(SourceRegistry::class) && method_exists(SourceRegistry::class, 'defined') && count(SourceRegistry::defined()) > 1) {
             $keys = array_keys(SourceRegistry::defined());
@@ -336,8 +406,14 @@ final class AdminTest extends TestCase
     public function testActionsAndPasswordChange(): void
     {
         $this->login();
-        // (cache-clear itself is not run here: storage/cache is shared with running dev servers)
         $this->assertThrows(HttpException::class, fn () => $this->request('POST', '/admin/islem/cache-clear', [], false), 'actions need CSRF');
+        // bin/test.php points the cache at a temporary directory, so clearing it is safe here.
+        $this->assertTrue(str_starts_with(App::storagePath('cache'), sys_get_temp_dir()), 'tests use a temporary cache dir');
+        Cache::set('admin-test:entry', ['x' => 1], 600);
+        $cleared = $this->request('POST', '/admin/islem/cache-clear', ['_back' => '/admin']);
+        $this->assertSame(url('/admin'), $cleared->header('Location'));
+        $this->assertNull(Cache::get('admin-test:entry'), 'cache-clear empties the file cache');
+        $this->assertContains('Önbellek temizlendi.', implode(' ', array_column(Session::flashes(), 'message')));
         $response = $this->request('POST', '/admin/islem/bilinmeyen', ['_back' => '/admin/ayarlar']);
         $this->assertSame(url('/admin/ayarlar'), $response->header('Location'));
         $this->assertContains('Bilinmeyen işlem: bilinmeyen', implode(' ', array_column(Session::flashes(), 'message')));
@@ -399,6 +475,8 @@ final class AdminTest extends TestCase
     {
         return $overrides + [
             'news_daily_limit' => '10', 'news_min_interval_minutes' => '60', 'spinner_min_change_ratio' => '0,4',
+            'news_max_age_hours' => '48', 'news_window_from' => '7', 'news_window_to' => '23',
+            'seo_google_verification' => '', 'seo_bing_verification' => '', 'seo_yandex_verification' => '',
             'site_hero_title' => '', 'site_hero_subtitle' => '', 'site_portrait_url' => '', 'analytics_ga4_id' => '', 'indexnow_key' => '',
             'youtube_api_key' => '', 'cron_web_token' => '',
         ];

@@ -371,3 +371,13 @@ CREATE TABLE IF NOT EXISTS orders (
 );
 CREATE INDEX IF NOT EXISTS idx_orders_status ON orders (status, created_at);
 CREATE INDEX IF NOT EXISTS idx_orders_payment_status ON orders (payment_status);
+
+-- Old slugs of renamed posts/products: the public page answers 301 to the current URL.
+CREATE TABLE IF NOT EXISTS slug_redirects (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  entity TEXT NOT NULL,
+  old_slug TEXT NOT NULL,
+  target_id INTEGER NOT NULL,
+  created_at TEXT NOT NULL
+);
+CREATE UNIQUE INDEX IF NOT EXISTS uq_slug_redirects ON slug_redirects (entity, old_slug);

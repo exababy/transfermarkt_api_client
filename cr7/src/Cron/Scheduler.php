@@ -6,8 +6,10 @@ namespace App\Cron;
 
 use App\Core\App;
 use App\Core\Database;
+use App\Core\Settings;
 use App\Cron\Tasks\NewsFetchTask;
 use App\Cron\Tasks\NewsPublishTask;
+use App\Cron\Tasks\ShopExpireTask;
 use App\Cron\Tasks\TransfermarktSyncTask;
 use App\Cron\Tasks\VideoSyncTask;
 use App\Support\Date;
@@ -23,6 +25,12 @@ final class Scheduler
     /** Tolerance so a 10-minute task is not skipped by a cron tick a few seconds early. */
     private const GRACE_SECONDS = 60;
 
+    /** First retry delay after a failed run (doubles per consecutive failure, capped at the interval). */
+    private const RETRY_MINUTES = 15;
+
+    /** Settings key prefix of the consecutive-failure counter of a task. */
+    private const FAILURES_KEY = 'cron.failures.';
+
     /** @return array<string, class-string<Task>> task name => class */
     public static function tasks(): array
     {
@@ -31,6 +39,7 @@ final class Scheduler
             'news-fetch' => NewsFetchTask::class,
             'news-publish' => NewsPublishTask::class,
             'videos-sync' => VideoSyncTask::class,
+            'shop-expire' => ShopExpireTask::class,
         ];
     }
 
@@ -48,7 +57,7 @@ final class Scheduler
             return [self::result($only, 'error', 'Bilinmeyen görev. Geçerli görevler: ' . implode(', ', array_keys($tasks)))];
         }
 
-        $lockFile = App::basePath('storage/locks/cron.lock');
+        $lockFile = App::storagePath('locks/cron.lock');
         if (!is_dir(dirname($lockFile))) {
             @mkdir(dirname($lockFile), 0775, true);
         }
@@ -95,14 +104,25 @@ final class Scheduler
         return $rows;
     }
 
+    /**
+     * Due when the interval has passed since the last start; after a failed run sooner, with backoff
+     * (15 → 30 → 60 … minutes per consecutive failure, never longer than the interval), so a transient
+     * Transfermarkt/YouTube outage does not leave the data stale for a whole 6 h / 3 h interval.
+     */
     private static function isDue(string $name, int $intervalMinutes): bool
     {
-        $last = Database::fetchValue('SELECT last_started_at FROM cron_runs WHERE task = ?', [$name]);
+        $row = Database::fetchOne('SELECT last_started_at, last_status FROM cron_runs WHERE task = ?', [$name]);
+        $last = $row['last_started_at'] ?? null;
         if (!is_string($last) || $last === '') {
             return true;
         }
+        $wait = $intervalMinutes;
+        if (($row['last_status'] ?? '') === 'error') {
+            $failures = max(1, (int) Settings::get(self::FAILURES_KEY . $name, 1));
+            $wait = min($intervalMinutes, self::RETRY_MINUTES * 2 ** min(8, $failures - 1));
+        }
         $lastTs = strtotime($last . ' UTC');
-        return $lastTs === false || $lastTs + $intervalMinutes * 60 <= time() + self::GRACE_SECONDS;
+        return $lastTs === false || $lastTs + $wait * 60 <= time() + self::GRACE_SECONDS;
     }
 
     private static function runTask(string $name, Task $task): array
@@ -129,6 +149,10 @@ final class Scheduler
             'last_status' => $status,
             'last_message' => mb_substr($message, 0, 2000),
         ], 'task = ?', [$name]);
+        $failures = (int) Settings::get(self::FAILURES_KEY . $name, 0);
+        if ($status === 'error' || $failures !== 0) {
+            Settings::set(self::FAILURES_KEY . $name, $status === 'error' ? $failures + 1 : 0); // retry backoff (isDue)
+        }
 
         return self::result($name, $status, $message, (int) round((microtime(true) - $started) * 1000));
     }

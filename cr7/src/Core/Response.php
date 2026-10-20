@@ -100,6 +100,14 @@ final class Response
         return $this->body;
     }
 
+    /** Same response with another body (headers, status and CSP additions are kept). */
+    public function withBody(string $body): self
+    {
+        $clone = clone $this;
+        $clone->body = $body;
+        return $clone;
+    }
+
     /** @return array<string, string> name => value */
     public function headers(): array
     {
@@ -133,9 +141,65 @@ final class Response
         }
     }
 
+    /**
+     * Conditional GET: a public, cacheable 200 answer to GET/HEAD gets a weak ETag (hash of the body
+     * without the per-request CSP nonce). A matching If-None-Match — or, when the controller set
+     * Last-Modified and no If-None-Match was sent, an If-Modified-Since not older than it — turns it
+     * into a body-less 304, so crawlers re-fetching unchanged pages, sitemaps or feeds save the body.
+     */
+    public function conditional(Request $request): self
+    {
+        if ($this->status !== 200 || !in_array($request->method(), ['GET', 'HEAD'], true)) {
+            return $this;
+        }
+        $cacheControl = (string) (array_change_key_case($this->finalHeaders())['cache-control'] ?? '');
+        if (!str_contains($cacheControl, 'public') || str_contains($cacheControl, 'no-store') || str_contains($cacheControl, 'private')) {
+            return $this;
+        }
+        $clone = clone $this;
+        $etag = $this->header('ETag') ?? 'W/"' . substr(sha1(str_replace(self::nonce(), '', $this->body)), 0, 32) . '"';
+        $clone->setHeader('ETag', $etag);
+        $clone->setHeader('Cache-Control', $cacheControl);
+
+        $ifNoneMatch = $request->header('If-None-Match');
+        $notModified = false;
+        if ($ifNoneMatch !== null) {
+            $want = self::opaqueTag($etag);
+            foreach (explode(',', $ifNoneMatch) as $candidate) {
+                $candidate = trim($candidate);
+                if ($candidate === '*' || self::opaqueTag($candidate) === $want) {
+                    $notModified = true;
+                    break;
+                }
+            }
+        } elseif (($since = $request->header('If-Modified-Since')) !== null && ($modified = $this->header('Last-Modified')) !== null) {
+            $sinceTs = strtotime($since);
+            $modifiedTs = strtotime($modified);
+            $notModified = $sinceTs !== false && $modifiedTs !== false && $modifiedTs <= $sinceTs;
+        }
+        if ($notModified) {
+            $clone->status = 304;
+            $clone->body = '';
+        }
+        return $clone;
+    }
+
+    /** ETag without the weak prefix and the "-gzip"/"-br" suffix Apache mod_deflate/mod_brotli append. */
+    private static function opaqueTag(string $tag): string
+    {
+        $tag = trim((string) preg_replace('#^W/#i', '', trim($tag)), '"');
+        return (string) preg_replace('/-(?:gzip|br)$/', '', $tag);
+    }
+
     /** @return array<string, string> headers including security defaults */
     public function finalHeaders(): array
     {
+        if ($this->status === 304) {
+            // RFC 9110 §15.4.5: only validators and caching headers. Never a new CSP: the cached body
+            // carries the nonce of the response it came with.
+            $keep = ['cache-control', 'etag', 'expires', 'vary', 'content-location', 'last-modified', 'x-robots-tag'];
+            return array_filter($this->headers(), static fn (string $name): bool => in_array(strtolower($name), $keep, true), ARRAY_FILTER_USE_KEY);
+        }
         $isHtml = str_starts_with(strtolower((string) $this->header('Content-Type')), 'text/html');
         $defaults = [
             'X-Content-Type-Options' => 'nosniff',

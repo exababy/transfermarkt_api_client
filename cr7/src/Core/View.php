@@ -8,7 +8,7 @@ namespace App\Core;
  * Plain-PHP template renderer. Templates live in templates/{name}.php and always escape with e().
  *
  * render('pages/home', $data) renders the page, then the layout with $content (string) + all $data.
- * Shared data (View::share) is available everywhere: $cspNonce, $currentPath.
+ * Shared data (View::share) is available everywhere: $cspNonce (always set: the request's CSP nonce), $currentPath.
  */
 final class View
 {
@@ -17,7 +17,7 @@ final class View
 
     public static function render(string $template, array $data = [], ?string $layout = 'layouts/main'): string
     {
-        $data = array_replace(self::$shared, $data);
+        $data = array_replace(['cspNonce' => Response::nonce()], self::$shared, $data);
         $content = self::renderFile(self::resolve($template), $data);
         if ($layout === null) {
             return $content;
@@ -28,7 +28,7 @@ final class View
     /** Render a template without layout (partials). */
     public static function partial(string $template, array $data = []): string
     {
-        return self::renderFile(self::resolve($template), array_replace(self::$shared, $data));
+        return self::renderFile(self::resolve($template), array_replace(['cspNonce' => Response::nonce()], self::$shared, $data));
     }
 
     /** Make a value available to every template. */

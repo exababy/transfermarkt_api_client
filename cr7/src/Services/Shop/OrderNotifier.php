@@ -32,6 +32,19 @@ final class OrderNotifier
         );
     }
 
+    /** A gateway reported a payment that must be confirmed by hand (Shopier return). */
+    public static function review(array $order): void
+    {
+        $paymentId = (string) ($order['payload']['payment_id'] ?? '');
+        self::send(
+            'Ödeme kontrolü gerekiyor: ' . $order['order_no'],
+            'Müşteri ' . $order['payment_method'] . ' ödeme sayfasından "başarılı" dönüşüyle geldi'
+            . ($paymentId !== '' ? ' (bildirilen ödeme no: ' . $paymentId . ')' : '') . ".\n"
+            . "Bu dönüş ödemeyi kanıtlamaz: ödemeyi sağlayıcının satıcı panelinde görüp tutarı kontrol ettikten sonra\n"
+            . "yönetim panelinde \"Ödeme alındı olarak işaretle\" ile onaylayın.\n\n" . self::summary($order)
+        );
+    }
+
     private static function summary(array $order): string
     {
         $lines = [

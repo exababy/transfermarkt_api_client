@@ -35,7 +35,7 @@ final class BingFetcher extends RssFetcher
     {
         $link = html_entity_decode(trim($link), ENT_QUOTES | ENT_HTML5, 'UTF-8');
         $host = strtolower((string) parse_url($link, PHP_URL_HOST));
-        if ($host !== '' && str_ends_with($host, 'bing.com')) {
+        if ($host === 'bing.com' || str_ends_with($host, '.bing.com')) { // not "evilbing.com"
             parse_str((string) parse_url($link, PHP_URL_QUERY), $query);
             if (isset($query['url']) && is_string($query['url']) && preg_match('#^https?://#i', $query['url']) === 1) {
                 return $query['url'];

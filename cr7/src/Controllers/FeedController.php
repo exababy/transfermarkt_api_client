@@ -10,6 +10,7 @@ use App\Core\Seo;
 use App\Repositories\NewsRepository;
 use App\Services\News\IndexNow;
 use App\Services\News\Tagger;
+use App\Support\Log;
 
 /**
  * RSS 2.0 feed (/rss.xml) and the IndexNow key file (/indexnow-key.txt).
@@ -23,8 +24,15 @@ final class FeedController
         $posts = [];
         try {
             $posts = (new NewsRepository())->forFeed(self::FEED_SIZE);
-        } catch (\Throwable) {
-            // not installed yet: an empty but valid feed
+        } catch (\Throwable $e) {
+            // Not installed yet (no posts table): an empty but valid feed. Database unavailable: 503,
+            // an empty feed would be cached by readers (max-age) and aggregators.
+            if (!SitemapController::missingTable($e)) {
+                Log::error('site', 'RSS feed failed: ' . $e->getMessage(), ['exception' => get_class($e)]);
+                return Response::text("RSS akışı geçici olarak kullanılamıyor.\n", 503)
+                    ->withHeader('Retry-After', '600')
+                    ->withHeader('Cache-Control', 'no-store');
+            }
         }
         $self = url('/rss.xml');
         $lastBuild = $posts !== [] ? (string) ($posts[0]['updated_at'] ?: $posts[0]['published_at']) : gmdate('Y-m-d H:i:s');

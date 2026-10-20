@@ -9,9 +9,15 @@ use App\Core\App;
 /**
  * File cache in storage/cache (serialize, atomic writes). Store arrays/scalars only:
  * objects are not restored (unserialize allowed_classes=false).
+ *
+ * Keys starting with a KEEP prefix are pipeline state that cannot be rebuilt from the database
+ * (feed full texts the publisher still needs, the rejected-videos list, open PayTR tokens): they
+ * live in storage/cache/keep/ and survive flush() ("Önbelleği temizle"), still expiring by TTL.
  */
 final class Cache
 {
+    private const KEEP = ['news:feedtext:', 'videos.rejected', 'paytr-iframe-'];
+
     /** Cached value, or null when missing/expired. */
     public static function get(string $key): mixed
     {
@@ -22,7 +28,7 @@ final class Cache
     /** Store a value; $ttl in seconds (<= 0 = no expiry). */
     public static function set(string $key, mixed $value, int $ttl): void
     {
-        $dir = self::dir();
+        $dir = dirname(self::file($key));
         if (!is_dir($dir) && !@mkdir($dir, 0775, true) && !is_dir($dir)) {
             return;
         }
@@ -51,9 +57,10 @@ final class Cache
     public static function forget(string $key): void
     {
         @unlink(self::file($key));
+        @unlink(self::dir() . '/' . sha1($key) . '.cache'); // a KEEP key written before keep/ existed
     }
 
-    /** Delete every cache entry. */
+    /** Delete every cache entry except the KEEP pipeline state (storage/cache/keep/). */
     public static function flush(): void
     {
         foreach (glob(self::dir() . '/*.cache') ?: [] as $file) {
@@ -65,6 +72,9 @@ final class Cache
     private static function read(string $key): array
     {
         $file = self::file($key);
+        if (!is_file($file)) {
+            $file = self::dir() . '/' . sha1($key) . '.cache'; // KEEP key written before keep/ existed
+        }
         $raw = is_file($file) ? @file_get_contents($file) : false;
         if ($raw === false) {
             return [false, null];
@@ -82,11 +92,16 @@ final class Cache
 
     private static function file(string $key): string
     {
+        foreach (self::KEEP as $prefix) {
+            if (str_starts_with($key, $prefix)) {
+                return self::dir() . '/keep/' . sha1($key) . '.cache';
+            }
+        }
         return self::dir() . '/' . sha1($key) . '.cache';
     }
 
     private static function dir(): string
     {
-        return App::basePath('storage/cache');
+        return App::storagePath('cache');
     }
 }

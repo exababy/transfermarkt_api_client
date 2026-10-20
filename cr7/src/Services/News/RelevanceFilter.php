@@ -13,7 +13,8 @@ use App\Support\Str;
  * A keyword (config 'news.keywords', default ronaldo / cr7) must start a word in the title or
  * the description (Turkish-aware lowercase, so "RONALDO'YA" and "Ronaldoya" both match).
  * Other Ronaldos (Nazário, "Brezilyalı Ronaldo", R9, Ronaldinho …) are excluded unless
- * "Cristiano" / "CR7" is present as well.
+ * "Cristiano" / "CR7" is present as well. Before publishing, aboutCristiano() runs on the
+ * whole story text, which must name Cristiano explicitly.
  */
 final class RelevanceFilter
 {
@@ -21,10 +22,21 @@ final class RelevanceFilter
     private const OTHER_RONALDOS = [
         'nazário', 'nazario', 'brezilyalı ronaldo', 'brezilyali ronaldo', 'ronaldo luís', 'ronaldo luis', 'ronaldo luiz',
         'fenomeno', 'fenômeno', 'r9', 'ronaldinho', 'gaúcho', 'gaucho', 'ronaldo de assis', 'ronaldo fenomen',
+        // Nazário's federation bid and the clubs he owned
+        'cbf', 'brezilya futbol federasyonu', 'cruzeiro', 'valladolid',
     ];
 
+    /**
+     * "Brezilyalı (efsane golcü) Ronaldo", "Brezilya'nın efsanesi Ronaldo": up to two words in
+     * between, but not a list ("Brezilyalı Neymar ile Ronaldo").
+     */
+    private const OTHER_RONALDO_PATTERN = '/(?<![\p{L}\p{N}])brezilya(?:l[ıi]|[\'’]?n[ıi]n)\s+(?:(?!(?:ile|ve|veya|ya)\s)\p{L}+\s+){0,2}ronaldo/u';
+
     /** Phrases that make sure it is Cristiano. */
-    private const CRISTIANO = ['cristiano', 'cr7', 'portekizli yıldız', 'portekizli süperstar', 'al-nassr', 'al nassr'];
+    private const CRISTIANO = [
+        'cristiano', 'christiano', 'cr7', 'portekiz', 'al-nassr', 'al nassr', 'al-nasr', 'al nasr',
+        'juventus', 'manchester united', 'georgina',
+    ];
 
     /** 2 = title mentions him, 1 = only the description does, 0 = not relevant. */
     public static function score(string $title, string $description = ''): int
@@ -65,8 +77,23 @@ final class RelevanceFilter
         return array_values(array_filter(array_map(static fn ($k): string => Str::lower(trim((string) $k)), $keywords)));
     }
 
+    /**
+     * Publish-time check on a whole story (title + description + extracted article text): it must
+     * name Cristiano unambiguously (Cristiano, CR7, Portekiz, Al-Nassr …). A full article about
+     * him always does; one about Ronaldo Nazário ("Brezilya'nın efsane golcüsü Ronaldo", CBF,
+     * Cruzeiro) never does, although it says "Ronaldo" in every paragraph.
+     */
+    public static function aboutCristiano(string $text): bool
+    {
+        $lower = Str::lower($text);
+        return self::mentions($lower) && self::containsAny($lower, self::CRISTIANO);
+    }
+
     private static function pointsToOtherRonaldo(string $lower): bool
     {
+        if (preg_match(self::OTHER_RONALDO_PATTERN, $lower) === 1) {
+            return true;
+        }
         foreach (self::OTHER_RONALDOS as $marker) {
             if (preg_match('/(?<![\p{L}\p{N}])' . preg_quote($marker, '/') . '(?![\p{L}\p{N}])/u', $lower) === 1) {
                 return true;

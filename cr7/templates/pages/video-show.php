@@ -1,6 +1,6 @@
 <?php
 /**
- * /video/{slug} — facade player, details, description, related videos.
+ * /video/{slug} — server-rendered player (indexable), details, description, related videos.
  *
  * @var array<string, mixed> $video VideoRepository::findBySlug() row
  * @var list<array<string, mixed>> $related
@@ -21,7 +21,7 @@ $duration = VideoText::humanDuration($video['duration_seconds']);
 <div class="container video-page">
   <div class="layout-sidebar video-layout">
     <article class="video-article" aria-labelledby="video-title">
-      <?= partial('partials/video-embed', ['youtubeId' => $video['youtube_id'], 'title' => $video['title'], 'thumbnail' => $video['thumbnail_url']]) ?>
+      <?= partial('partials/video-embed', ['youtubeId' => $video['youtube_id'], 'title' => $video['title'], 'thumbnail' => $video['thumbnail_url'], 'facade' => false]) ?>
 
       <header class="video-head">
         <a class="badge" href="<?= e(url($categoryUrl)) ?>"><?= e($video['category_name']) ?></a>

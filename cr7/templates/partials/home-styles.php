@@ -27,7 +27,10 @@ $page = $page ?? 'static';
 .home-portrait.is-empty{display:grid;place-items:center;max-width:300px}
 .home-portrait.is-empty span{color:rgba(212,175,55,.45);font-size:5rem;font-weight:900;font-style:italic;letter-spacing:-.05em}
 .home-credit{position:absolute;right:10px;bottom:8px;left:10px;z-index:2;color:#d6d6de;font-size:.72rem;text-align:right}
-@media (max-width:959.98px){.home-hero .hero-media{order:-1}.home-portrait.is-tm,.home-portrait.is-empty{max-width:220px;justify-self:start}}
+@media (max-width:959.98px){.home-hero .hero-media{order:-1}.home-portrait.is-tm,.home-portrait.is-empty{max-width:220px;justify-self:center}}
+/* Tablets: the portrait sits beside the heading instead of alone above it with an empty half row. */
+@media (min-width:640px) and (max-width:959.98px){.home-hero>.container{grid-template-columns:minmax(0,1fr) 220px}.home-hero .hero-media{order:0;max-width:220px;justify-self:end}}
+.home-hero .hero-actions{align-items:center;column-gap:20px}
 .stat-tiles.home-tiles{grid-template-columns:repeat(2,minmax(0,1fr))}
 @media (min-width:640px){.stat-tiles.home-tiles{grid-template-columns:repeat(4,minmax(0,1fr))}}
 .home-source{margin:14px 0 0}

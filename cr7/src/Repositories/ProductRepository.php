@@ -47,6 +47,17 @@ final class ProductRepository
         return $row === null ? null : self::decorate($row);
     }
 
+    /** Current slug of the active product that used $slug before it was renamed (=> 301), or null. */
+    public function movedSlug(string $slug): ?string
+    {
+        $id = SlugRedirectRepository::target(SlugRedirectRepository::PRODUCT, $slug);
+        if ($id === null) {
+            return null;
+        }
+        $current = Database::fetchValue('SELECT slug FROM products WHERE id = ? AND is_active = 1', [$id]);
+        return is_string($current) && $current !== $slug ? $current : null;
+    }
+
     /** Any product by id (admin; inactive included). */
     public function find(int $id): ?array
     {
@@ -108,9 +119,9 @@ final class ProductRepository
         $where = [];
         $params = [];
         if ($q !== '') {
-            $like = '%' . Database::likeEscape($q) . '%';
-            $where[] = "(title LIKE ? ESCAPE '\\' OR slug LIKE ? ESCAPE '\\' OR club_name LIKE ? ESCAPE '\\' OR season LIKE ? ESCAPE '\\')";
-            array_push($params, $like, $like, $like, $like);
+            [$sql, $likeParams] = Database::containsAny(['title', 'slug', 'club_name', 'season'], $q);
+            $where[] = $sql;
+            array_push($params, ...$likeParams);
         }
         if ($clubId !== '') {
             $where[] = 'club_id = ?';
@@ -149,12 +160,17 @@ final class ProductRepository
     {
         $row = array_intersect_key($data, array_flip(self::FIELDS));
         $row['updated_at'] = Date::now();
+        $oldSlug = isset($row['slug']) ? Database::fetchValue('SELECT slug FROM products WHERE id = ?', [$id]) : null;
         Database::update('products', $row, 'id = ?', [$id]);
+        if (is_string($oldSlug)) {
+            SlugRedirectRepository::record(SlugRedirectRepository::PRODUCT, $oldSlug, (string) $row['slug'], $id); // old URL => 301
+        }
     }
 
     public function delete(int $id): void
     {
         Database::execute('DELETE FROM products WHERE id = ?', [$id]);
+        SlugRedirectRepository::forget(SlugRedirectRepository::PRODUCT, $id);
     }
 
     /** Number of orders referencing a product (admin delete warning). */

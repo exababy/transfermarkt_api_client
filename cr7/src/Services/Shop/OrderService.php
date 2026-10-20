@@ -177,6 +177,9 @@ final class OrderService
         }
 
         $quote = $this->quote($product, (int) $data['quantity'], (bool) $data['with_print']);
+        if (($product['stock'] ?? null) !== null && (int) $product['stock'] < (int) $data['quantity']) {
+            $this->expireUnpaid(); // stale unpaid orders give their stock back even when cron is not running
+        }
         $order = Database::transaction(function () use ($product, $data, $quote, $ip): ?array {
             if (!$this->products->reserveStock((int) $product['id'], (int) $data['quantity'])) {
                 return null;
@@ -215,6 +218,48 @@ final class OrderService
         Log::info('shop', 'Order created', ['order_no' => $order['order_no'], 'method' => $order['payment_method'], 'total' => $order['total']]);
         OrderNotifier::created($order);
         return ['order' => $order, 'errors' => [], 'status' => 201, 'data' => $data];
+    }
+
+    /**
+     * Cancel new orders that still are not paid and hold LIMITED stock (card payments after
+     * Shop::CARD_RESERVATION_HOURS, Havale/EFT after Shop::TRANSFER_RESERVATION_HOURS) and give the stock back,
+     * so unpaid (e.g. fake) orders cannot keep a product sold out. A Shopier return waiting for the owner's
+     * check ('review') is kept. Run by the 'shop-expire' cron task and before a stock shortage is reported.
+     *
+     * @return int cancelled orders
+     */
+    public function expireUnpaid(?int $now = null): int
+    {
+        $now ??= time();
+        $rows = Database::fetchAll(
+            "SELECT o.* FROM orders o JOIN products p ON p.id = o.product_id "
+            . "WHERE o.status = 'yeni' AND o.payment_status IN ('bekliyor', 'basarisiz') AND p.stock IS NOT NULL AND o.created_at < ? ORDER BY o.id",
+            [gmdate('Y-m-d H:i:s', $now - min(Shop::CARD_RESERVATION_HOURS, Shop::TRANSFER_RESERVATION_HOURS) * 3600)]
+        );
+        $cancelled = 0;
+        foreach ($rows as $row) {
+            $order = OrderRepository::decorate($row);
+            $hours = $order['payment_method'] === 'havale' ? Shop::TRANSFER_RESERVATION_HOURS : Shop::CARD_RESERVATION_HOURS;
+            if (strtotime($order['created_at'] . ' UTC') > $now - $hours * 3600 || !empty($order['payload']['review'])) {
+                continue;
+            }
+            $done = Database::transaction(static function () use ($order): bool {
+                $changed = Database::execute(
+                    "UPDATE orders SET status = 'iptal', updated_at = ? WHERE id = ? AND status = 'yeni' AND payment_status IN ('bekliyor', 'basarisiz')",
+                    [Date::now(), $order['id']]
+                );
+                if ($changed !== 1) {
+                    return false; // paid or changed meanwhile
+                }
+                Database::execute('UPDATE products SET stock = stock + ? WHERE id = ? AND stock IS NOT NULL', [$order['quantity'], $order['product_id']]);
+                return true;
+            });
+            if ($done) {
+                $cancelled++;
+                Log::info('shop', 'Unpaid order expired, stock released', ['order_no' => $order['order_no'], 'method' => $order['payment_method'], 'quantity' => $order['quantity']]);
+            }
+        }
+        return $cancelled;
     }
 
     /** Turkish phone => '05XXXXXXXXX' (mobile 5xx or landline 2xx–4xx), null when invalid. */

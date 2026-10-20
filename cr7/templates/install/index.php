@@ -62,8 +62,8 @@ $errors = $errors ?? [];
     </div>
     <div class="field">
       <label for="password">Şifre</label>
-      <input class="input" id="password" name="password" type="password" required minlength="8" autocomplete="new-password"<?= isset($errors['password']) ? ' aria-invalid="true"' : '' ?>>
-      <p class="form-help">En az 8 karakter; uzun ve tahmin edilmesi zor bir şifre seçin.</p>
+      <input class="input" id="password" name="password" type="password" required minlength="<?= (int) \App\Install\Installer::MIN_PASSWORD_LENGTH ?>" autocomplete="new-password"<?= isset($errors['password']) ? ' aria-invalid="true"' : '' ?>>
+      <p class="form-help">En az <?= (int) \App\Install\Installer::MIN_PASSWORD_LENGTH ?> karakter; uzun ve tahmin edilmesi zor bir şifre seçin.</p>
       <?php if (isset($errors['password'])): ?><p class="form-error"><?= e($errors['password']) ?></p><?php endif; ?>
     </div>
     <div class="field">

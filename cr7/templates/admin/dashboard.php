@@ -7,8 +7,10 @@
  * @var string|null $lastTmSync UTC
  * @var list<array{ts: string, level: string, channel: string, message: string, context: array}> $logs newest first
  * @var string $back current path (for action redirects)
+ * @var list<string> $paymentWarnings active gateways in test mode (PaymentManager::testModeWarnings())
  */
 
+$paymentWarnings ??= [];
 $statusBadge = static function (?string $status, bool $stale): string {
     [$class, $label] = match (true) {
         $stale => ['badge-warning', 'Takıldı'],
@@ -45,9 +47,12 @@ $quickLinks = [
     ['/', 'Siteyi görüntüle', 'Yeni sekmede açılır'],
 ];
 ?>
+<?php foreach ($paymentWarnings as $warning): ?>
+<div class="notice notice-warning" role="status" data-payment-test-mode><strong>Test modu açık.</strong> <?= e($warning) ?> <a href="<?= e(url('/admin/odeme-ayarlari')) ?>">Ödeme Ayarları</a></div>
+<?php endforeach; ?>
 <section class="admin-section" aria-labelledby="overview-title">
   <h2 id="overview-title" class="visually-hidden">Genel bakış</h2>
-  <div class="stat-grid">
+  <div class="stat-grid" data-count="<?= count($tiles) ?>">
     <?php foreach ($tiles as $key => $tile): ?>
     <a class="stat-card<?= !empty($tile['tone']) ? ' tone-' . e($tile['tone']) : '' ?>" href="<?= e(url($tile['url'] ?? '/admin')) ?>" data-tile="<?= e($key) ?>">
       <span class="stat-label"><?= e($tile['label']) ?></span>

@@ -24,6 +24,7 @@ final class ActionsController
         'news-fetch' => 'Haber toplama',
         'news-publish' => 'Haber yayınlama',
         'videos-sync' => 'Video senkronizasyonu',
+        'shop-expire' => 'Ödenmemiş siparişleri iptal (stok iadesi)',
         'cache-clear' => 'Önbellek temizleme',
     ];
 

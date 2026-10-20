@@ -10,6 +10,8 @@ use App\Core\Database;
 use App\Core\Request;
 use App\Core\Response;
 use App\Core\Session;
+use App\Repositories\NewsRepository;
+use App\Repositories\SlugRedirectRepository;
 use App\Services\News\IndexNow;
 use App\Services\News\NewsPublisher;
 use App\Support\Date;
@@ -42,9 +44,9 @@ final class PostsController
         $where = ['1 = 1'];
         $params = [];
         if ($q !== '') {
-            $where[] = "(title LIKE ? ESCAPE '\\' OR slug LIKE ? ESCAPE '\\' OR tags LIKE ? ESCAPE '\\')";
-            $like = AdminPage::like($q);
-            array_push($params, $like, $like, $like);
+            [$sql, $likeParams] = Database::containsAny(['title', 'slug', 'tags'], $q);
+            $where[] = $sql;
+            array_push($params, ...$likeParams);
         }
         $now = Date::now();
         if ($status === 'published') {
@@ -165,9 +167,12 @@ final class PostsController
             return $this->form(array_replace($post, $data), $errors, 422);
         }
         Database::update('posts', $data + ['updated_at' => Date::now()], 'id = ?', [$id]);
+        // The old URL is already in sitemaps, RSS and other sites' links: it answers 301 from now on.
+        SlugRedirectRepository::record(SlugRedirectRepository::POST, (string) $post['slug'], (string) $data['slug'], $id);
 
         $messages = ['Değişiklikler kaydedildi.'];
-        if (AdminPage::checked($request, 'regenerate_image') || $data['title'] !== $post['title'] || empty($post['image_path'])) {
+        // Also when the stored image file has gone missing (imageUrl() is null for empty or missing files).
+        if (AdminPage::checked($request, 'regenerate_image') || $data['title'] !== $post['title'] || NewsRepository::imageUrl($post['image_path'] ?? null) === null) {
             $messages[] = self::regenerateImage($id) !== null ? 'Paylaşım görseli yeniden oluşturuldu.' : 'Paylaşım görseli oluşturulamadı.';
         }
         $this->pingIndexNow($id);
@@ -190,11 +195,12 @@ final class PostsController
         }
         Database::transaction(static function () use ($id): void {
             Database::execute('DELETE FROM posts WHERE id = ?', [$id]);
+            SlugRedirectRepository::forget(SlugRedirectRepository::POST, $id);
             // The source item must not be published again automatically.
             Database::execute("UPDATE news_items SET status = 'skipped', post_id = NULL, note = ? WHERE post_id = ?", ['admin: yazı silindi', $id]);
         });
-        if (!empty($post['image_path']) && class_exists(OgImage::class) && method_exists(OgImage::class, 'delete')) {
-            OgImage::delete((string) $post['image_path']);
+        if (!empty($post['image_path'])) {
+            NewsPublisher::deleteImage((string) $post['image_path'], $id); // kept while another post still shows it
         }
         Log::info('admin', 'post deleted', ['post' => $id, 'slug' => $post['slug'], 'user' => Auth::user()['id'] ?? null]);
         Session::flash('success', '“' . Str::limit((string) $post['title'], 80) . '” silindi.');
@@ -216,7 +222,7 @@ final class PostsController
             if ($post === null) {
                 return null;
             }
-            $path = OgImage::generate((string) $post['title'], Format::date((string) $post['published_at'], 'j F Y'), 'haber-' . substr((string) $post['slug'], 0, 100) . '-' . substr(sha1((string) $post['title']), 0, 6));
+            $path = OgImage::generate((string) $post['title'], Format::date((string) $post['published_at'], 'j F Y'), 'haber-' . $postId . '-' . substr((string) $post['slug'], 0, 80) . '-' . substr(sha1((string) $post['title']), 0, 6));
             if ($path !== null) {
                 Database::update('posts', ['image_path' => $path], 'id = ?', [$postId]);
                 if (!empty($post['image_path']) && $post['image_path'] !== $path && method_exists(OgImage::class, 'delete')) {

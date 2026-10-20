@@ -17,6 +17,7 @@ use App\Core\Response;
 use App\Core\Router;
 use App\Core\Settings;
 use App\Support\Date;
+use App\Support\OgImage;
 
 /**
  * Site module: home, /hayati, /kupalar-ve-oduller, /arama, static pages, sitemaps, robots.txt.
@@ -75,7 +76,12 @@ final class SiteTest extends TestCase
             'created_at' => Date::now(), 'updated_at' => Date::now(),
         ]);
 
+        Settings::set('seo.google_verification', 'AbC-123_xyz');
+        Settings::set('seo.bing_verification', '"><script>');
         $html = $this->get('/')->body();
+        $this->assertContains('<meta name="google-site-verification" content="AbC-123_xyz">', $html, 'webmaster verification tag on the home page');
+        $this->assertNotContains('msvalidate.01', $html, 'invalid codes are never printed');
+        $this->assertNotContains('google-site-verification', $this->get('/hayati')->body(), 'verification tags only on the home page');
         $this->assertContains('Ronaldo 981. golünü attı', $html);
         $this->assertContains('Ronaldo’nun en güzel golleri', $html);
         $this->assertContains('class="result-W"', $html);
@@ -225,11 +231,17 @@ final class SiteTest extends TestCase
     public function testSitemapsAreValidXml(): void
     {
         $this->seedStats();
-        $this->seedPost('yeni-haber', 'Yeni haber & “özel” <karakterler>', 1, '/og/yeni-haber.png');
-        $this->seedPost('eski-haber', 'Eski haber', 24 * 10);
+        // An existing image file is listed; a missing one ('/og/silinmis.png') is not (it would 404).
+        $this->seedPost('yeni-haber', 'Yeni haber & “özel” <karakterler>', 1, '/assets/img/og-default.png');
+        $this->seedPost('eski-haber', 'Eski haber', 24 * 10, '/og/silinmis.png');
         Database::insert('videos', [
-            'youtube_id' => 'abcdefghijk', 'slug' => 'ronaldo-golleri-abcde', 'title' => 'Ronaldo & Messi', 'description' => '',
+            'youtube_id' => 'abcdefghijk', 'slug' => 'ronaldo-golleri-abcde', 'title' => 'Ronaldo’nun & Messi’nin golleri', 'description' => '',
             'category' => 'goller', 'duration_seconds' => 125, 'published_at' => Date::ago(3600), 'created_at' => Date::now(), 'updated_at' => Date::now(),
+        ]);
+        // An auto-imported video with a foreign-language title is noindex: not in the video sitemap.
+        Database::insert('videos', [
+            'youtube_id' => 'zyxwvutsrqp', 'slug' => 'next-stop-miami-zyxwv', 'title' => 'NEXT STOP: MIAMI', 'description' => 'Portugal', 'source' => 'rss',
+            'category' => 'genel', 'published_at' => Date::ago(7200), 'created_at' => Date::now(), 'updated_at' => Date::now(),
         ]);
 
         $index = $this->xml('/sitemap.xml');
@@ -241,14 +253,14 @@ final class SiteTest extends TestCase
         $this->assertTrue(count($this->values($index, '//s:sitemap/s:lastmod')) >= 3, 'lastmod per child');
 
         $pages = $this->values($this->xml('/sitemap-pages.xml'), '//s:url/s:loc');
-        foreach (['/', '/hayati', '/istatistikler/maclar', '/kupalar-ve-oduller', '/forma-magazasi', '/hakkinda'] as $path) {
+        foreach (['/', '/hayati', '/istatistikler/maclar', '/kupalar-ve-oduller', '/forma-magazasi', '/hakkinda', '/mesafeli-satis-sozlesmesi', '/on-bilgilendirme-formu', '/iptal-ve-iade'] as $path) {
             $this->assertContains('https://cr7.com.tr' . $path, $pages, 'pages sitemap: ' . $path);
         }
         $this->assertNotContains('https://cr7.com.tr/arama', $pages);
 
         $posts = $this->xml('/sitemap-posts.xml');
         $this->assertCount(2, $this->values($posts, '//s:url/s:loc'));
-        $this->assertSame(['https://cr7.com.tr/og/yeni-haber.png'], $this->values($posts, '//image:image/image:loc'));
+        $this->assertSame(['https://cr7.com.tr/assets/img/og-default.png'], $this->values($posts, '//image:image/image:loc'));
 
         $news = $this->xml('/sitemap-news.xml');
         $this->assertSame(['https://cr7.com.tr/haber/yeni-haber'], $this->values($news, '//s:url/s:loc'), 'only the last 48 h');
@@ -259,7 +271,7 @@ final class SiteTest extends TestCase
         $videos = $this->xml('/sitemap-videos.xml');
         $this->assertSame(['https://www.youtube-nocookie.com/embed/abcdefghijk'], $this->values($videos, '//video:player_loc'));
         $this->assertSame(['125'], $this->values($videos, '//video:duration'));
-        $this->assertSame(['Ronaldo & Messi'], $this->values($videos, '//video:description'), 'description falls back to the title');
+        $this->assertSame(['Ronaldo’nun & Messi’nin golleri'], $this->values($videos, '//video:description'), 'description falls back to the title');
         $this->assertCount(1, $this->values($videos, '//video:thumbnail_loc'));
 
         $clubs = $this->values($this->xml('/sitemap-clubs.xml'), '//s:url/s:loc');
@@ -273,7 +285,96 @@ final class SiteTest extends TestCase
         Settings::set('shop.enabled', false);
         $this->assertSame(404, $this->get('/sitemap-products.xml')->status(), 'no product sitemap while the shop is off');
         $this->assertNotContains('/forma-magazasi', $this->get('/sitemap-pages.xml')->body());
+        $this->assertNotContains('/mesafeli-satis-sozlesmesi', $this->get('/sitemap-pages.xml')->body(), 'shop legal pages leave the sitemap with the shop');
         $this->assertNotContains('sitemap-products.xml', $this->get('/sitemap.xml')->body());
+    }
+
+    public function testCachedSitemapsFollowContentChanges(): void
+    {
+        Config::set('sitemap.cache_ttl', 3600);
+        Config::set('app.url', 'https://sitemap-cache-' . bin2hex(random_bytes(4)) . '.test'); // own cache keys
+        $this->seedPost('ilk-haber', 'İlk haber', 1);
+        $this->assertContains('/haber/ilk-haber<', $this->get('/sitemap-posts.xml')->body());
+        $this->assertContains('/haber/ilk-haber<', $this->get('/sitemap-news.xml')->body());
+
+        // Renamed slug, deleted post and a new post show up at once (no stale cache for an hour).
+        Database::update('posts', ['slug' => 'yeni-adres'], 'slug = ?', ['ilk-haber']);
+        $this->seedPost('ikinci-haber', 'İkinci haber', 0);
+        $posts = $this->get('/sitemap-posts.xml')->body();
+        $this->assertNotContains('/haber/ilk-haber<', $posts, 'old slug left the sitemap');
+        $this->assertContains('/haber/yeni-adres<', $posts);
+        $this->assertContains('/haber/ikinci-haber<', $posts);
+        Database::execute('DELETE FROM posts WHERE slug = ?', ['ikinci-haber']);
+        $this->assertNotContains('/haber/ikinci-haber<', $this->get('/sitemap-news.xml')->body(), 'deleted post left the news sitemap');
+
+        $this->assertSame('public, max-age=300', $this->get('/sitemap-news.xml')->header('Cache-Control'));
+        $this->assertSame('public, max-age=300', $this->get('/sitemap.xml')->header('Cache-Control'));
+        $this->assertSame('public, max-age=3600', $this->get('/sitemap-posts.xml')->header('Cache-Control'));
+    }
+
+    public function testSitemapsAndRssAreNotServedEmptyWhenQueriesFail(): void
+    {
+        Config::set('sitemap.cache_ttl', 3600);
+        Config::set('app.url', 'https://sitemap-down-' . bin2hex(random_bytes(4)) . '.test'); // own cache keys
+        $this->seedPost('ilk-haber', 'İlk haber', 1);
+        Database::pdo()->exec('ALTER TABLE posts RENAME COLUMN slug TO slug_broken'); // every posts query fails
+        foreach (['/sitemap.xml', '/sitemap-posts.xml', '/sitemap-news.xml', '/sitemap-pages.xml', '/rss.xml'] as $path) {
+            $response = $this->get($path);
+            $this->assertSame(503, $response->status(), $path . ' while the query fails');
+            $this->assertSame('600', $response->header('Retry-After'), $path);
+            $this->assertSame('no-store', $response->header('Cache-Control'), $path);
+        }
+        Database::pdo()->exec('ALTER TABLE posts RENAME COLUMN slug_broken TO slug');
+        $this->assertContains('/haber/ilk-haber<', $this->get('/sitemap-posts.xml')->body(), 'the failed build was not cached');
+        $this->assertContains('/haber/ilk-haber<', $this->get('/rss.xml')->body());
+    }
+
+    public function testLargeArchivesAreSplitAndFullyPaged(): void
+    {
+        $total = SitemapController::POSTS_PER_FILE + 3; // 10 posts a day for ~16 months
+        $insert = Database::pdo()->prepare("INSERT INTO posts (slug, title, summary, body, tags, published_at, updated_at, created_at) VALUES (?, ?, 'Özet', '<p>Metin</p>', ?, ?, ?, ?)");
+        Database::pdo()->beginTransaction();
+        for ($i = 0; $i < $total; $i++) {
+            $at = Date::ago(3600 + $i * 8640);
+            $insert->execute(['arsiv-haber-' . $i, 'Arşiv haber ' . $i, $i % 2 === 0 ? 'Al-Nassr, Gol' : 'Gol Krallığı', $at, $at, $at]);
+        }
+        Database::pdo()->commit();
+
+        $index = $this->get('/sitemap.xml')->body();
+        $this->assertContains('<loc>https://cr7.com.tr/sitemap-posts.xml</loc>', $index);
+        $this->assertContains('<loc>https://cr7.com.tr/sitemap-posts-2.xml</loc>', $index);
+        $this->assertNotContains('sitemap-posts-3.xml', $index);
+        $this->assertSame(SitemapController::POSTS_PER_FILE, substr_count($this->get('/sitemap-posts.xml')->body(), '<loc>'));
+        $older = $this->get('/sitemap-posts-2.xml');
+        $this->assertSame(200, $older->status());
+        $this->assertSame(3, substr_count($older->body(), '<loc>'));
+        $this->assertContains('/haber/arsiv-haber-' . ($total - 1) . '<', $older->body(), 'the oldest post is listed');
+        foreach (['/sitemap-posts-3.xml', '/sitemap-posts-1.xml'] as $path) {
+            $this->assertSame(404, $this->get($path)->status(), $path);
+        }
+
+        // Tag archives count and page in SQL: every post is reachable, exact tag match ("Gol" ≠ "Gol Krallığı").
+        $news = new \App\Repositories\NewsRepository();
+        $this->assertSame(intdiv($total + 1, 2), $news->countByTag('al-nassr'));
+        $this->assertSame(intdiv($total + 1, 2), $news->countByTag('gol'));
+        $this->assertSame(intdiv($total, 2), $news->countByTag('gol-kralligi'));
+        $last = $news->byTag('al-nassr', 12, intdiv($total + 1, 2) - 1);
+        $this->assertSame(['arsiv-haber-' . ($total - 1)], array_column($last, 'slug'), 'oldest tagged post on the last page');
+        $this->assertSame(intdiv($total + 1, 2), $news->tagCounts()['al-nassr']['count']);
+    }
+
+    public function testSectionPagesHaveTheirOwnShareCardAndHomePreconnect(): void
+    {
+        $this->seedStats();
+        foreach (['/hayati' => 'sayfa-hayati-', '/kupalar-ve-oduller' => 'sayfa-kupalar-ve-oduller-'] as $path => $prefix) {
+            $html = $this->get($path)->body();
+            $this->assertSame(1, preg_match('#<meta property="og:image" content="https://cr7\.com\.tr/og/' . $prefix . '[0-9a-f]{6}\.png">#', $html), $path . ': own 1200x630 card, not og-default');
+            $this->assertContains('<meta property="og:image:width" content="1200">', $html, $path);
+        }
+        $card = OgImage::page('hayati', 'Cristiano Ronaldo’nun Hayatı', 'Biyografi ve aile', 'HAYATI');
+        $this->assertSame([1200, 630], array_slice((array) getimagesize(App::basePath('public' . $card)), 0, 2));
+        // Home LCP is the Transfermarkt portrait: connect to its host early (no crossorigin for <img>).
+        $this->assertContains('<link rel="preconnect" href="https://img.a.transfermarkt.technology">', $this->get('/')->body());
     }
 
     public function testRobotsTxt(): void

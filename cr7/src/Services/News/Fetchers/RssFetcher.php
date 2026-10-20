@@ -14,7 +14,7 @@ class RssFetcher implements Fetcher
 {
     public function fetch(string $key, array $source): array
     {
-        $response = Http::get($source['url'], [
+        $response = Http::getPublic($source['url'], [ // feed hosts may redirect anywhere: public hosts only
             'Accept' => 'application/rss+xml, application/atom+xml, application/xml;q=0.9, text/xml;q=0.8, */*;q=0.5',
             'Accept-Language' => 'tr-TR,tr;q=0.9',
         ], 25);

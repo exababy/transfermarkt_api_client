@@ -9,6 +9,7 @@
  * @var list<array<string, mixed>> $spells careerClubs() rows of this club
  * @var array<string, int> $totals gameTotals()
  * @var list<array<string, mixed>> $seasons seasonStats() ascending
+ * @var array<int, array> $matchSeasons seasonOptions(): seasons the match list can filter by
  * @var list<array<string, mixed>> $competitions
  * @var list<array<string, mixed>> $opponents
  * @var list<array<string, mixed>> $wins
@@ -30,6 +31,7 @@ $multi = count($entries) > 1;
 $isNational = (bool) $page['is_national'];
 $ratio = $totals['appearances'] > 0 ? $totals['goals'] / $totals['appearances'] : 0;
 $winRate = $totals['appearances'] > 0 ? $totals['wins'] / $totals['appearances'] * 100 : 0;
+$hasStats = $totals['appearances'] > 0; // false before the first sync: no zero tiles / "no hat-trick" claims
 $ordinals = ['Birinci', 'İkinci', 'Üçüncü', 'Dördüncü'];
 $color = !empty($page['color1']) && $page['color1'] !== '#FFFFFF' ? (string) $page['color1'] : null;
 
@@ -73,15 +75,19 @@ $sum = static function (array $rows, string $col): int {
 <section class="section-sm" aria-labelledby="ozet-baslik">
   <div class="container stack">
     <h2 class="visually-hidden" id="ozet-baslik"><?= e($name) ?> istatistik özeti</h2>
+    <?php if (!$hasStats): ?>
+    <?= partial('partials/stats-empty', ['text' => $name . ' formasıyla oynadığı maçlar, goller ve asistler Transfermarkt ile ilk senkronizasyondan sonra burada görünecek.']) ?>
+    <?php else: ?>
     <div class="stat-tiles">
       <?= partial('partials/stat-tile', ['value' => $totals['appearances'], 'label' => 'Maç', 'sub' => Format::number($totals['minutes']) . ' dakika']) ?>
       <?= partial('partials/stat-tile', ['value' => $totals['goals'], 'label' => 'Gol', 'sub' => 'Maç başına ' . Format::number($ratio, 2)]) ?>
       <?= partial('partials/stat-tile', ['value' => $totals['assists'], 'label' => 'Asist', 'sub' => Format::number($totals['starts']) . ' kez ilk 11']) ?>
       <?= partial('partials/stat-tile', ['value' => $totals['penalty_goals'], 'label' => 'Penaltı golü']) ?>
       <?= partial('partials/stat-tile', ['value' => $totals['hat_tricks'], 'label' => 'Hat-trick', 'sub' => 'Maçta 3+ gol']) ?>
-      <?= partial('partials/stat-tile', ['value' => Format::number($winRate, 1) . '%', 'label' => 'Galibiyet oranı', 'sub' => $totals['wins'] . 'G ' . $totals['draws'] . 'B ' . $totals['losses'] . 'M']) ?>
+      <?= partial('partials/stat-tile', ['value' => Format::percent($winRate, 1), 'label' => 'Galibiyet oranı', 'sub' => $totals['wins'] . 'G ' . $totals['draws'] . 'B ' . $totals['losses'] . 'M']) ?>
     </div>
-    <?php if ($multi && $spells !== []): ?>
+    <?php endif; ?>
+    <?php if ($hasStats && $multi && $spells !== []): ?>
     <div class="grid grid-2">
       <?php foreach ($spells as $i => $spell): ?>
       <article class="card">
@@ -177,7 +183,7 @@ $sum = static function (array $rows, string $col): int {
         <tbody>
           <?php foreach ($group['rows'] as $row): ?>
           <tr>
-            <th scope="row"><a href="<?= e(url('/istatistikler/maclar?sezon=' . $row['season_id'])) ?>"><?= e($row['season_label']) ?></a></th>
+            <th scope="row"><?php if (isset($matchSeasons[(int) $row['season_id']])): ?><a href="<?= e(url('/istatistikler/maclar?sezon=' . $row['season_id'])) ?>"><?= e($row['season_label']) ?></a><?php else: ?><?= e($row['season_label']) ?><?php endif; ?></th>
             <td class="num"><?= e(Format::number($row['appearances'])) ?></td>
             <td class="num"><strong><?= e(Format::number($row['goals'])) ?></strong></td>
             <td class="num"><?= e(Format::number($row['assists'])) ?></td>
@@ -278,6 +284,7 @@ $sum = static function (array $rows, string $col): int {
 </section>
 <?php endif; ?>
 
+<?php if ($hasStats): ?>
 <section class="section" id="hat-trickler" aria-labelledby="hat-trick-baslik">
   <div class="container">
     <div class="section-header">
@@ -291,6 +298,7 @@ $sum = static function (array $rows, string $col): int {
     <?php endif; ?>
   </div>
 </section>
+<?php endif; ?>
 
 <?php if ($latest !== []): ?>
 <section class="section section-alt" aria-labelledby="son-maclar-baslik">

@@ -13,6 +13,7 @@ use App\Core\Settings;
 use App\Cron\Scheduler;
 use App\Repositories\OrderRepository;
 use App\Repositories\StatsRepository;
+use App\Services\Payment\PaymentManager;
 use App\Support\Date;
 use App\Support\Log;
 
@@ -28,10 +29,11 @@ final class DashboardController
         'news-fetch' => 'Haber toplama',
         'news-publish' => 'Haber yayınlama',
         'videos-sync' => 'Video senkronizasyonu',
+        'shop-expire' => 'Ödenmemiş siparişleri iptal (stok iadesi)',
     ];
 
     /** Fallback intervals (minutes) when a task class cannot be instantiated. */
-    private const DEFAULT_INTERVALS = ['tm-sync' => 360, 'news-fetch' => 30, 'news-publish' => 10, 'videos-sync' => 180];
+    private const DEFAULT_INTERVALS = ['tm-sync' => 360, 'news-fetch' => 30, 'news-publish' => 10, 'videos-sync' => 180, 'shop-expire' => 30];
 
     public function index(Request $request): Response
     {
@@ -45,6 +47,7 @@ final class DashboardController
             'lastTmSync' => $this->lastTmSync(),
             'logs' => Log::tail(50),
             'back' => AdminPage::currentPath($request),
+            'paymentWarnings' => (new PaymentManager())->testModeWarnings(),
         ]);
     }
 
