@@ -1,0 +1,14 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 96 40" width="96" height="40" role="img" aria-label="CR7">
+  <defs>
+    <linearGradient id="cr7-gold" x1="0" y1="4" x2="0" y2="36" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#f7e39b"/>
+      <stop offset=".5" stop-color="#d4af37"/>
+      <stop offset="1" stop-color="#a6821f"/>
+    </linearGradient>
+  </defs>
+  <g fill="none" stroke="url(#cr7-gold)" stroke-width="6.4" stroke-linejoin="miter" transform="translate(7 0) skewX(-10)">
+    <path d="M26.2 10.4A12.4 12.4 0 1 0 26.2 29.6"/>
+    <path d="M38 33.2V7h9.4a6.5 6.5 0 0 1 0 13H38M45.6 20 53.4 33.2"/>
+    <path d="M59.6 7H79L65.6 33.2"/>
+  </g>
+</svg>

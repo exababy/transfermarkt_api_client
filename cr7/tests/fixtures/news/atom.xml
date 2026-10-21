@@ -1,0 +1,15 @@
+<feed xmlns="http://www.w3.org/2005/Atom">
+  <title type="text">ntvspor.net</title>
+  <updated>2026-10-20T17:07:34+03:00</updated>
+  <entry>
+    <id>https://atom-spor.test/futbol/ronaldo-aciklama-431606</id>
+    <title type="text">Ronaldo, milli takımı bırakmadığını açıkladı</title>
+    <summary type="text">Portekizli yıldız sosyal medya hesabından açıklama yaptı.</summary>
+    <published>2026-10-20T17:07:14+03:00</published>
+    <updated>2026-10-20T17:07:14+03:00</updated>
+    <author><name>Atom Spor</name></author>
+    <category term="Futbol" />
+    <link rel="alternate" href="https://atom-spor.test/futbol/ronaldo-aciklama-431606" />
+    <content type="html"><![CDATA[<img src="https://images.atom-spor.test/r.jpg" alt="x" /><p>Cristiano Ronaldo, sosyal medya hesabından yaptığı açıklamada milli takımı bırakmadığını belirtti.</p><p>Ronaldo kasım ayındaki maçlarda kadroda olmayı hedefliyor.</p>]]></content>
+  </entry>
+</feed>
